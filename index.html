@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Логистика авто</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- MarkerCluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .wrap { display: grid; grid-template-columns: 1fr 360px; height: 100vh; }
+    #map { height: 100vh; }
+    .side { border-left: 1px solid #eee; padding: 12px; overflow: auto; }
+    .title { font-size: 16px; font-weight: 700; margin: 0 0 8px; }
+    .sub { font-size: 12px; color: #666; margin: 0 0 12px; }
+    .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
+    .row { display: flex; gap: 10px; }
+    .img { width: 88px; height: 66px; border-radius: 10px; background: #f3f3f3; object-fit: cover; }
+    .meta { flex: 1; }
+    .big { font-weight: 700; margin: 0; }
+    .small { font-size: 12px; color: #666; margin: 4px 0 0; }
+    .pill { display:inline-block; font-size: 12px; padding: 4px 8px; border-radius: 999px; background:#f6f6f6; margin-top:8px;}
+    .timeline { margin-top: 10px; }
+    .titem { display:flex; justify-content:space-between; gap:8px; font-size: 12px; padding: 6px 0; border-top: 1px dashed #eee; }
+    .titem b { font-weight: 600; }
+    .muted { color:#777; }
+    .hint { font-size: 12px; color: #777; margin-top: 8px; }
+    .btn { display:inline-block; padding: 8px 10px; border-radius: 10px; border:1px solid #eee; background:#fff; cursor:pointer; }
+    @media (max-width: 900px) {
+      .wrap { grid-template-columns: 1fr; }
+      .side { height: 40vh; }
+      #map { height: 60vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="map"></div>
+    <div class="side">
+      <p class="title">Поставки автомобилей</p>
+      <p class="sub">Позиции и этапы отображаются ориентировочно по плановой скорости и длительностям этапов.</p>
+
+      <div class="card" id="summaryCard">
+        <div><b id="countCars">—</b> авто на карте</div>
+        <div class="hint">Кликните по машине на карте, чтобы увидеть маршрут и этапы.</div>
+      </div>
+
+      <div id="details"></div>
+    </div>
+  </div>
+
+<script>
+/** =========================
+ * CONFIG
+ * ========================= */
+const WORKER_PUBLIC_URL = "PASTE_YOUR_WORKER_PUBLIC_URL_HERE"; // например https://xxx.workers.dev/public
+const REFRESH_DATA_MS = 60_000;   // как часто подтягивать данные
+const TICK_MS = 10_000;           // как часто “двигать” маркеры на экране
+
+/** =========================
+ * MAP SETUP
+ * ========================= */
+const map = L.map('map', { preferCanvas: true }).setView([50.5, 127.5], 4);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18, attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+const cluster = L.markerClusterGroup();
+map.addLayer(cluster);
+
+let hubsById = new Map();
+let cars = [];
+let markersByCarId = new Map();
+let routeLayer = null;
+
+/** =========================
+ * UTILS: distance & interpolation
+ * ========================= */
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = (x) => x * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+
+  const s = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function lerpLatLng(a, b, t) {
+  return { lat: a.lat + (b.lat - a.lat)*t, lng: a.lng + (b.lng - a.lng)*t };
+}
+
+/** =========================
+ * STAGE MODEL (hybrid)
+ * =========================
+ * We build timeline:
+ * 1) docs_1 (days)
+ * 2) loading (days)
+ * 3) transport segment 1
+ * 4) transshipment (days) [only if there is mid hub]
+ * 5) transport segment 2
+ * 6) transshipment (days) [if there is another mid hub]
+ * 7) transport segment 3
+ * 8) export docs (days) (arrive border city + export)
+ */
+function buildRoutePoints(car) {
+  const pts = [];
+  const addHub = (id) => {
+    if (!id) return;
+    const h = hubsById.get(id);
+    if (h && typeof h.lat === "number" && typeof h.lng === "number") pts.push(h);
+  };
+  addHub(car.start_hub);
+  addHub(car.mid1_hub);
+  addHub(car.mid2_hub);
+  addHub(car.end_hub);
+  // remove duplicates by id sequence
+  const cleaned = [];
+  let last = null;
+  for (const p of pts) {
+    if (!last || last.id !== p.id) cleaned.push(p);
+    last = p;
+  }
+  return cleaned;
+}
+
+function buildStages(car, nowMs) {
+  const startMs = Date.parse(car.start_time || "");
+  if (!startMs || Number.isNaN(startMs)) return { stages: [], status: "Нет даты старта", pos: null };
+
+  const pts = buildRoutePoints(car);
+  if (pts.length < 2) return { stages: [], status: "Маршрут не задан", pos: null };
+
+  const kmPerDay = Math.max(50, Number(car.km_per_day || 600)); // защитный минимум
+  const dayMs = 86400 * 1000;
+
+  let t = startMs;
+  const stages = [];
+
+  const pushStage = (type, title, durMs, extra={}) => {
+    const s = { type, title, startMs: t, endMs: t + durMs, ...extra };
+    stages.push(s);
+    t = s.endMs;
+  };
+
+  // 1) docs before loading
+  pushStage("docs", "Оформление документов", (car.doc_days_1 || 2) * dayMs);
+
+  // 2) loading
+  pushStage("loading", "Погрузка", (car.loading_days || 1) * dayMs);
+
+  // segments
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i+1];
+    const distKm = haversineKm(a, b);
+    const durDays = distKm / kmPerDay;
+    pushStage("transport", `Перевозка: ${a.name} → ${b.name}`, durDays * dayMs, {
+      segIndex: i,
+      from: a,
+      to: b,
+      distKm,
+      kmPerDay
+    });
+
+    // transshipment between segments (only if there is another segment ahead)
+    if (i < pts.length - 2) {
+      pushStage("transshipment", "Перегрузка", (car.transshipment_days || 0.5) * dayMs, { at: b });
+    }
+  }
+
+  // export docs at border city (end hub)
+  pushStage("export_docs", "Оформление экспортных документов", (car.export_doc_days || 1) * dayMs, { at: pts[pts.length - 1] });
+
+  // find current stage
+  let current = stages.find(s => nowMs >= s.startMs && nowMs < s.endMs) || null;
+
+  let pos = null;
+  if (current?.type === "transport") {
+    const tProg = (nowMs - current.startMs) / (current.endMs - current.startMs);
+    const clamped = Math.max(0, Math.min(1, tProg));
+    pos = lerpLatLng(current.from, current.to, clamped);
+  } else {
+    // if not in transport, pin position to the last reached hub-ish
+    // find last stage that ended
+    const lastEnded = [...stages].reverse().find(s => nowMs >= s.endMs) || null;
+    if (!lastEnded) pos = { lat: pts[0].lat, lng: pts[0].lng };
+    else if (lastEnded.type === "transport") pos = { lat: lastEnded.to.lat, lng: lastEnded.to.lng };
+    else if (lastEnded.at) pos = { lat: lastEnded.at.lat, lng: lastEnded.at.lng };
+    else pos = { lat: pts[0].lat, lng: pts[0].lng };
+  }
+
+  // status label
+  let status = current ? current.title : (nowMs < startMs ? "Ожидает старта" : "Завершено");
+  return { stages, current, pos, routePoints: pts, status, endMs: t };
+}
+
+function formatEta(ms) {
+  const diff = ms - Date.now();
+  if (diff <= 0) return "сейчас";
+  const hours = diff / 3600000;
+  if (hours < 24) return `${Math.round(hours)} ч`;
+  const days = hours / 24;
+  if (days < 14) return `${days.toFixed(1)} дн`;
+  return `${Math.round(days)} дн`;
+}
+
+function formatDateTime(ms) {
+  const d = new Date(ms);
+  return d.toLocaleString("ru-RU");
+}
+
+/** =========================
+ * UI: render details
+ * ========================= */
+function showCarDetails(car) {
+  const now = Date.now();
+  const model = buildStages(car, now);
+
+  // route polyline
+  if (routeLayer) map.removeLayer(routeLayer);
+  routeLayer = L.polyline(model.routePoints.map(p => [p.lat, p.lng]), { weight: 3 }).addTo(map);
+  map.fitBounds(routeLayer.getBounds(), { padding: [30, 30] });
+
+  const el = document.getElementById("details");
+  el.innerHTML = "";
+
+  const card = document.createElement("div");
+  card.className = "card";
+
+  const imgHtml = car.photo_url ? `<img class="img" src="${car.photo_url}" alt="auto" />` : `<div class="img"></div>`;
+
+  const eta = model.endMs ? formatEta(model.endMs) : "—";
+
+  card.innerHTML = `
+    <div class="row">
+      ${imgHtml}
+      <div class="meta">
+        <p class="big">${escapeHtml(car.brand)} ${escapeHtml(car.model)}</p>
+        <p class="small">Старт: ${car.start_time ? escapeHtml(car.start_time) : "—"}</p>
+        <div class="pill">${escapeHtml(model.status)}</div>
+        <p class="small"><span class="muted">Ориентировочно до границы:</span> ${eta}</p>
+      </div>
+    </div>
+
+    <div class="timeline" id="timeline"></div>
+    <div class="hint">${car.notes ? escapeHtml(car.notes) : ""}</div>
+  `;
+  el.appendChild(card);
+
+  const tl = card.querySelector("#timeline");
+  for (const s of model.stages) {
+    const isNow = model.current && s.startMs === model.current.startMs && s.endMs === model.current.endMs;
+    const row = document.createElement("div");
+    row.className = "titem";
+    row.innerHTML = `
+      <div><b>${isNow ? "▶ " : ""}${escapeHtml(s.title)}</b></div>
+      <div class="muted">${escapeHtml(formatDateTime(s.startMs))} → ${escapeHtml(formatDateTime(s.endMs))}</div>
+    `;
+    tl.appendChild(row);
+  }
+}
+
+function escapeHtml(str) {
+  return String(str || "").replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+  }[m]));
+}
+
+/** =========================
+ * MARKERS
+ * ========================= */
+function buildPopup(car, status) {
+  const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
+  return `<b>${escapeHtml(title)}</b><br/><span style="font-size:12px;color:#666">${escapeHtml(status)}</span>`;
+}
+
+function upsertMarkers() {
+  const now = Date.now();
+
+  // remove old markers not present
+  const carIds = new Set(cars.map(c => c.id));
+  for (const [id, mk] of markersByCarId.entries()) {
+    if (!carIds.has(id)) {
+      cluster.removeLayer(mk);
+      markersByCarId.delete(id);
+    }
+  }
+
+  for (const car of cars) {
+    const model = buildStages(car, now);
+    if (!model.pos) continue;
+
+    let marker = markersByCarId.get(car.id);
+    if (!marker) {
+      marker = L.marker([model.pos.lat, model.pos.lng]);
+      marker.on("click", () => showCarDetails(car));
+      marker.bindPopup(buildPopup(car, model.status));
+      markersByCarId.set(car.id, marker);
+      cluster.addLayer(marker);
+    } else {
+      marker.setLatLng([model.pos.lat, model.pos.lng]);
+      marker.setPopupContent(buildPopup(car, model.status));
+    }
+  }
+
+  document.getElementById("countCars").textContent = String(cars.length);
+}
+
+/** =========================
+ * DATA LOAD
+ * ========================= */
+async function loadData() {
+  const resp = await fetch(WORKER_PUBLIC_URL, { cache: "no-store" });
+  if (!resp.ok) throw new Error("Failed to load data");
+  const data = await resp.json();
+
+  hubsById = new Map((data.hubs || []).map(h => [h.id, h]));
+  cars = (data.cars || []).filter(c => c.start_hub && c.end_hub && c.start_time);
+
+  upsertMarkers();
+}
+
+async function start() {
+  try {
+    await loadData();
+  } catch (e) {
+    console.error(e);
+    alert("Не удалось загрузить данные. Проверьте URL воркера и доступы.");
+    return;
+  }
+
+  // Refresh data periodically
+  setInterval(() => loadData().catch(console.error), REFRESH_DATA_MS);
+
+  // Tick to animate marker positions
+  setInterval(() => upsertMarkers(), TICK_MS);
+}
+
+start();
+</script>
+</body>
+</html>
