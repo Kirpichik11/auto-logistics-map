@@ -16,9 +16,9 @@
 
   <style>
     body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .wrap { display: grid; grid-template-columns: 1fr 360px; height: 100vh; }
+    .wrap { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
     #map { height: 100vh; }
-    .side { border-left: 1px solid #eee; padding: 12px; overflow: auto; }
+    .side { border-left: 1px solid #eee; padding: 12px; overflow: auto; background:#fff; }
     .title { font-size: 16px; font-weight: 700; margin: 0 0 8px; }
     .sub { font-size: 12px; color: #666; margin: 0 0 12px; }
     .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
@@ -30,21 +30,40 @@
     .pill { display:inline-block; font-size: 12px; padding: 4px 8px; border-radius: 999px; background:#f6f6f6; margin-top:8px;}
     .muted { color:#777; }
     .hint { font-size: 12px; color: #777; margin-top: 8px; }
-    .titem { display:flex; justify-content:space-between; gap:8px; font-size: 12px; padding: 6px 0; border-top: 1px dashed #eee; }
-    .btn { display:inline-block; padding: 8px 10px; border-radius: 10px; border:1px solid #eee; background:#fff; cursor:pointer; }
+
+    /* List cards */
+    .listCard { border:1px solid #eee; border-radius:12px; padding:10px; margin-bottom:10px; cursor:pointer; }
+    .listCard:hover { background:#fafafa; }
+    .listTop { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .listTitle { font-weight:700; font-size:13px; margin:0; }
+    .badge { font-size:11px; padding:3px 8px; border-radius:999px; background:#f6f6f6; white-space:nowrap; }
+    .bar { height:6px; background:#eee; border-radius:999px; overflow:hidden; margin-top:8px; }
+    .bar > div { height:100%; width:0%; background:#111; border-radius:999px; }
+    .listMeta { font-size:12px; color:#666; margin-top:6px; display:flex; justify-content:space-between; gap:10px; }
+    .divider { border:none; border-top:1px dashed #eee; margin:12px 0; }
+
+    /* Car icon */
+    .carIcon {
+      font-size: 18px;
+      transform: translate(-6px, -10px);
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
+      user-select: none;
+    }
+
     @media (max-width: 900px) {
       .wrap { grid-template-columns: 1fr; }
-      .side { height: 40vh; }
-      #map { height: 60vh; }
+      .side { height: 45vh; }
+      #map { height: 55vh; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div id="map"></div>
+
     <div class="side">
       <p class="title">Поставки автомобилей</p>
-      <p class="sub">Позиции и статусы рассчитываются автоматически на сервере и обновляются регулярно.</p>
+      <p class="sub">Позиции и статусы рассчитываются автоматически и отображаются ориентировочно.</p>
 
       <div class="card" id="summaryCard">
         <div><b id="countCars">—</b> авто на карте</div>
@@ -52,8 +71,8 @@
       </div>
 
       <div id="carList"></div>
+      <hr class="divider" />
       <div id="details"></div>
-
     </div>
   </div>
 
@@ -65,15 +84,17 @@ const WORKER_PUBLIC_URL = "/api/public";
 const REFRESH_DATA_MS = 60_000;
 const TICK_MS = 10_000;
 
-// показывать ли хабы точками на карте
-const SHOW_HUBS = true;
-
 /** =========================
  * MAP SETUP
  * ========================= */
 const map = L.map('map', { preferCanvas: true }).setView([50.5, 127.5], 4);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 18, attribution: '&copy; OpenStreetMap'
+
+/**
+ * CARTO Positron (нейтральные тайлы, без спорных атрибутов/флагов)
+ */
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  attribution: ''
 }).addTo(map);
 
 const cluster = L.markerClusterGroup();
@@ -82,7 +103,6 @@ map.addLayer(cluster);
 let cars = [];
 let hubs = [];
 let markersByCarId = new Map();
-let hubLayer = L.layerGroup().addTo(map);
 
 /** =========================
  * UTILS
@@ -113,14 +133,21 @@ function fmtEta(isoArrive) {
   return `${Math.round(days)} дн`;
 }
 
-function buildPopup(car) {
-  const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
-  const urgencyTxt = car.urgency === "fast" ? "Ускоренная" : "Стандарт";
-  return `
-    <b>${escapeHtml(title)}</b><br/>
-    <span style="font-size:12px;color:#666">Статус: ${escapeHtml(car.status || "—")}</span><br/>
-    <span style="font-size:12px;color:#666">Срочность: ${escapeHtml(urgencyTxt)}</span>
-  `;
+function urgencyText(u) {
+  return u === "fast" ? "Ускоренная" : "Стандарт";
+}
+
+/** =========================
+ * Icons
+ * ========================= */
+function makeCarIcon(car) {
+  const html = `<div class="carIcon">🚗</div>`;
+  return L.divIcon({
+    html,
+    className: "",
+    iconSize: [18, 18],
+    iconAnchor: [9, 9]
+  });
 }
 
 /** =========================
@@ -135,17 +162,23 @@ function showCarDetails(car) {
 
   const imgHtml = car.photo_url ? `<img class="img" src="${car.photo_url}" alt="auto" />` : `<div class="img"></div>`;
   const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
-  const urgencyTxt = car.urgency === "fast" ? "Ускоренная" : "Стандарт";
+
+  const pct = Math.round(((car.progress ?? 0) * 100));
+  const eta = fmtEta(car.arrive_time);
 
   card.innerHTML = `
     <div class="row">
       ${imgHtml}
       <div class="meta">
         <p class="big">${escapeHtml(title)}</p>
-        <p class="small"><span class="muted">Срочность:</span> ${escapeHtml(urgencyTxt)}</p>
+        <p class="small"><span class="muted">Срочность:</span> ${escapeHtml(urgencyText(car.urgency))}</p>
         <div class="pill">${escapeHtml(car.status || "—")}</div>
+
+        <div class="bar" style="margin-top:10px"><div style="width:${pct}%"></div></div>
+        <p class="small"><span class="muted">Прогресс:</span> ${pct}%</p>
+
         <p class="small"><span class="muted">Ориентировочное прибытие:</span> ${escapeHtml(fmtDate(car.arrive_time))}</p>
-        <p class="small"><span class="muted">Осталось:</span> ${escapeHtml(fmtEta(car.arrive_time))}</p>
+        <p class="small"><span class="muted">Осталось:</span> ${escapeHtml(eta)}</p>
       </div>
     </div>
 
@@ -153,33 +186,70 @@ function showCarDetails(car) {
   `;
   el.appendChild(card);
 
-  // приблизить к машине
+  // фокус к машине
   if (car.pos && typeof car.pos.lat === "number" && typeof car.pos.lng === "number") {
     map.setView([car.pos.lat, car.pos.lng], Math.max(map.getZoom(), 6), { animate: true });
   }
 }
 
 /** =========================
- * Hubs layer
+ * List
  * ========================= */
-function renderHubs() {
-  hubLayer.clearLayers();
-  if (!SHOW_HUBS) return;
+function renderCarList() {
+  const el = document.getElementById("carList");
+  if (!el) return;
 
-  for (const h of hubs) {
-    if (typeof h.lat !== "number" || typeof h.lng !== "number") continue;
-    const mk = L.circleMarker([h.lat, h.lng], {
-      radius: 5,
-      weight: 1,
-      fillOpacity: 0.6
-    }).bindTooltip(`${escapeHtml(h.name_ru || "Хаб")}`, { direction: "top" });
-    hubLayer.addLayer(mk);
+  // сортировка: ближе к завершению выше
+  const list = [...cars].sort((a,b) => (b.progress ?? 0) - (a.progress ?? 0));
+
+  el.innerHTML = list.map(car => {
+    const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
+    const pct = Math.round((car.progress ?? 0) * 100);
+    const eta = fmtEta(car.arrive_time);
+    const badge = urgencyText(car.urgency);
+
+    return `
+      <div class="listCard" data-id="${car.id}">
+        <div class="listTop">
+          <p class="listTitle">${escapeHtml(title)}</p>
+          <span class="badge">${escapeHtml(badge)}</span>
+        </div>
+
+        <div class="bar"><div style="width:${pct}%"></div></div>
+
+        <div class="listMeta">
+          <span>${escapeHtml(car.status || "—")}</span>
+          <span>ETA: ${escapeHtml(eta)}</span>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  for (const node of el.querySelectorAll(".listCard")) {
+    node.addEventListener("click", () => {
+      const id = node.getAttribute("data-id");
+      const car = cars.find(x => x.id === id);
+      if (!car) return;
+      showCarDetails(car);
+
+      // открыть popup на карте (если есть маркер)
+      const mk = markersByCarId.get(id);
+      if (mk) mk.openPopup();
+    });
   }
 }
 
 /** =========================
  * MARKERS
  * ========================= */
+function buildPopup(car) {
+  const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
+  return `
+    <b>${escapeHtml(title)}</b><br/>
+    <span style="font-size:12px;color:#666">Статус: ${escapeHtml(car.status || "—")}</span>
+  `;
+}
+
 function upsertMarkers() {
   // remove old markers not present
   const carIds = new Set(cars.map(c => c.id));
@@ -195,7 +265,7 @@ function upsertMarkers() {
 
     let marker = markersByCarId.get(car.id);
     if (!marker) {
-      marker = L.marker([car.pos.lat, car.pos.lng]);
+      marker = L.marker([car.pos.lat, car.pos.lng], { icon: makeCarIcon(car) });
       marker.on("click", () => showCarDetails(car));
       marker.bindPopup(buildPopup(car));
       markersByCarId.set(car.id, marker);
@@ -203,6 +273,8 @@ function upsertMarkers() {
     } else {
       marker.setLatLng([car.pos.lat, car.pos.lng]);
       marker.setPopupContent(buildPopup(car));
+      // если срочность поменяется — обновим иконку
+      marker.setIcon(makeCarIcon(car));
     }
   }
 
@@ -215,14 +287,20 @@ function upsertMarkers() {
 async function loadData() {
   const resp = await fetch(WORKER_PUBLIC_URL, { cache: "no-store" });
   if (!resp.ok) throw new Error("Failed to load data");
-
   const data = await resp.json();
 
-  hubs = (data.hubs || []).filter(h => typeof h.lat === "number" && typeof h.lng === "number");
-  cars = (data.cars || []).filter(c => c.pos && typeof c.pos.lat === "number" && typeof c.pos.lng === "number");
+  hubs = (data.hubs || []);
+  cars = (data.cars || []).filter(c =>
+    c.pos && typeof c.pos.lat === "number" && typeof c.pos.lng === "number"
+  );
 
-  renderHubs();
+  // если progress не приходит (пока не сделали патч API), пусть будет 0
+  for (const c of cars) {
+    if (typeof c.progress !== "number") c.progress = 0;
+  }
+
   upsertMarkers();
+  renderCarList();
 }
 
 async function start() {
@@ -235,7 +313,10 @@ async function start() {
   }
 
   setInterval(() => loadData().catch(console.error), REFRESH_DATA_MS);
-  setInterval(() => upsertMarkers(), TICK_MS);
+  setInterval(() => {
+    // без пересчёта — просто переотрисуем, если данные уже обновились
+    upsertMarkers();
+  }, TICK_MS);
 }
 
 start();
