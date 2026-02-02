@@ -72,7 +72,17 @@ function buildTimeline(route, startMs, urgency) {
     }
   }
 
-  return { stages, arriveMs: t };
+  return { stages, arriveMs: t, startMs };
+}
+
+function clamp01(x) {
+  return Math.max(0, Math.min(1, x));
+}
+
+function computeProgress(startMs, arriveMs, nowMs) {
+  const total = arriveMs - startMs;
+  if (!total || total <= 0) return 0;
+  return clamp01((nowMs - startMs) / total);
 }
 
 function position(stages, now) {
@@ -122,15 +132,20 @@ export default async function handler(req, res) {
     const p = position(stages, now);
     if (!p) continue;
 
-    result.push({
-      id: c.id,
-      brand: c.brand,
-      model: c.model,
-      photo_url: c.photo_url,
-      urgency: c.urgency,
-      arrive_time: new Date(arriveMs).toISOString(),
-      ...p,
-    });
+    const prog = computeProgress(startMs, arriveMs, now);
+
+      result.push({
+          id: c.id,
+          brand: c.brand,
+          model: c.model,
+          photo_url: c.photo_url,
+          urgency: c.urgency,
+          start_time: c.start_time,               // полезно для интерфейса
+          arrive_time: new Date(arriveMs).toISOString(),
+          progress: prog,                         // 0..1
+          ...p,
+      });
+
   }
 
   res.status(200).json({ cars: result, hubs });
