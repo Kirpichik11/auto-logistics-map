@@ -308,7 +308,7 @@ function upsertMarkers() {
       markersByCarId.set(car.id, marker);
       cluster.addLayer(marker);
     } else {
-      marker.setLatLng([model.pos.lat, model.pos.lng]);
+      marker.setLatLng([car.pos.lat, car.pos.lng]);
       marker.setPopupContent(buildPopup(car, model.status));
     }
   }
