@@ -10,32 +10,49 @@
 
   <style>
     body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .wrap { display:grid; grid-template-columns: 1fr 420px; height:100vh; }
+    .wrap { display:grid; grid-template-columns: 1fr 430px; height:100vh; }
     #map { height:100vh; }
-    .side { border-left:1px solid #eee; padding:12px; overflow:auto; }
+    .side { border-left:1px solid #eee; padding:12px; overflow:auto; background:#fff; }
     .card { border:1px solid #eee; border-radius:12px; padding:12px; margin-bottom:12px; }
     label { display:block; font-size:12px; color:#666; margin:8px 0 4px; }
-    input, select { width:100%; padding:8px; border:1px solid #ddd; border-radius:10px; }
+    input, select { width:100%; padding:9px; border:1px solid #ddd; border-radius:10px; }
     button { padding:10px 12px; border-radius:10px; border:1px solid #ddd; background:#fff; cursor:pointer; }
     .row { display:flex; gap:8px; }
     .row > * { flex:1; }
     .small { font-size:12px; color:#666; }
-    .ok { color: #0a7; }
-    .err { color: #d33; }
-    .tabs { display:flex; gap:8px; margin-bottom:12px; }
+    .ok { color:#0a7; }
+    .err { color:#d33; }
+    .tabs { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
     .tab { padding:8px 10px; border:1px solid #ddd; border-radius:999px; cursor:pointer; }
     .tab.active { background:#f3f3f3; }
+    .listItem { border-top:1px dashed #eee; padding:8px 0; }
+    .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:#f6f6f6; margin-left:6px; }
+    .muted { color:#888; }
+
+    /* Icons */
+    .carIcon { font-size:18px; transform: translate(-6px,-10px); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25)); user-select:none; }
+    .hubIcon {
+      font-size:18px;
+      width:28px; height:28px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      background:#e0e0e0;
+      border:2px solid #555;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
+      user-select:none;
+    }
+    .hubIcon.active { background:#333; border-color:#000; color:#fff; }
   </style>
 </head>
 <body>
 <div class="wrap">
   <div id="map"></div>
+
   <div class="side">
     <div class="card">
       <b>Доступ</b>
-      <div class="small">Введите пароль администратора (один общий).</div>
+      <div class="small">Введите ADMIN_PASS (один общий пароль).</div>
       <label>Пароль</label>
-      <input id="adminKey" type="password" placeholder="ADMIN_PASS из Vercel" />
+      <input id="adminKey" type="password" placeholder="ADMIN_PASS" />
       <button onclick="saveKey()">Сохранить</button>
       <div id="authMsg" class="small"></div>
     </div>
@@ -43,12 +60,14 @@
     <div class="tabs">
       <div class="tab active" id="tabHubs" onclick="showTab('hubs')">Хабы</div>
       <div class="tab" id="tabCars" onclick="showTab('cars')">Авто</div>
-      <div class="tab" id="tabRoutes" onclick="showTab('routes')">Маршруты РФ</div>
     </div>
 
+    <!-- HUBS -->
     <div id="panelHubs" class="card">
       <b>Хабы</b>
-      <div class="small">Кликните по карте → заполните форму → “Создать хаб”.</div>
+      <div class="small">Клик по карте → заполнить → сохранить. Клик по хабу на карте → редактирование.</div>
+
+      <input id="hubId" type="hidden" />
 
       <label>Координаты</label>
       <div class="row">
@@ -68,24 +87,38 @@
       <label>Название (рус)</label>
       <input id="hubNameRu" placeholder="Хэйхэ (Heihe)" />
 
+      <label>Тип пункта</label>
+      <select id="hubType">
+        <option value="hub">🏭 Логистический хаб</option>
+        <option value="border">🚧 Граница</option>
+        <option value="office">🏢 Наш офис</option>
+      </select>
+
       <label>Срок прохождения хаба (сутки)</label>
       <input id="hubDwell" placeholder="0.5" />
 
-      <button onclick="createHub()">Создать хаб</button>
-      <div id="hubMsg" class="small"></div>
+      <div class="row">
+        <button onclick="saveHub()">Сохранить</button>
+        <button onclick="resetHubForm()">Новый</button>
+      </div>
 
+      <div id="hubMsg" class="small"></div>
       <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
-      <button onclick="loadAll()">Обновить списки</button>
+      <button onclick="loadAll()">Обновить данные</button>
       <div id="hubsList" class="small"></div>
     </div>
 
+    <!-- CARS -->
     <div id="panelCars" class="card" style="display:none">
-      <b>Создать авто</b>
+      <b>Автомобили</b>
+      <div class="small">Создание + редактирование. Клик по машине на карте — откроет её карточку.</div>
 
-      <label>VIN (только для админки)</label>
+      <input id="carId" type="hidden" />
+
+      <label>VIN (только админка)</label>
       <input id="carVin" placeholder="VIN" />
 
-      <label>№ договора (только для админки)</label>
+      <label>№ договора (только админка)</label>
       <input id="carContract" placeholder="№ договора" />
 
       <label>Марка</label>
@@ -106,16 +139,23 @@
       <label>Старт процесса (дата/время)</label>
       <input id="carStartTime" type="datetime-local" />
 
-      <label>Маршрут: Китай (старт/промежуток/граница)</label>
+      <label>Маршрут (выберите точки по порядку)</label>
       <select id="carStartHub"></select>
       <select id="carMid1Hub"></select>
       <select id="carMid2Hub"></select>
       <select id="carBorderHub"></select>
 
-      <label>Маршрут РФ (шаблон)</label>
-      <select id="carRouteRu"></select>
+      <label>Показ на публичной карте</label>
+      <select id="carPublic">
+        <option value="true">Да</option>
+        <option value="false">Нет</option>
+      </select>
 
-      <button onclick="createCar()">Создать авто</button>
+      <div class="row">
+        <button onclick="saveCar()">Сохранить</button>
+        <button onclick="resetCarForm()">Новый</button>
+      </div>
+
       <div id="carMsg" class="small"></div>
 
       <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
@@ -128,36 +168,31 @@
       <div id="carsList" class="small"></div>
     </div>
 
-    <div id="panelRoutes" class="card" style="display:none">
-      <b>Маршруты РФ</b>
-      <div class="small">Создайте один раз “заготовленные” маршруты по России.</div>
-
-      <label>Название маршрута</label>
-      <input id="routeName" placeholder="Благовещенск → Москва" />
-
-      <label>Хабы РФ (выберите 2+ в порядке следования)</label>
-      <div id="routeHubsRU"></div>
-
-      <button onclick="createRoute()">Создать маршрут</button>
-      <div id="routeMsg" class="small"></div>
-
-      <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
-      <div id="routesList" class="small"></div>
-    </div>
-
   </div>
 </div>
 
 <script>
+/* ================= MAP ================= */
 const map = L.map('map').setView([50.5, 127.5], 4);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  attribution: ''
+}).addTo(map);
+
+const hubLayer = L.layerGroup().addTo(map);
+const carLayer = L.layerGroup().addTo(map);
 
 let adminKey = localStorage.getItem("adminKey") || "";
 document.getElementById("adminKey").value = adminKey;
 
 let hubs = [];
-let routes = [];
+let carsCache = []; // для подсветки активных хабов
+let hubMarkersById = new Map();
+let carMarkersById = new Map();
 
+const ACTIVE_HUB_RADIUS_KM = 10;
+
+/* ================= UTILS ================= */
 function saveKey(){
   adminKey = document.getElementById("adminKey").value.trim();
   localStorage.setItem("adminKey", adminKey);
@@ -165,16 +200,11 @@ function saveKey(){
 }
 
 function showTab(tab){
-  for (const [t, id] of [["hubs","panelHubs"],["cars","panelCars"],["routes","panelRoutes"]]) {
-    document.getElementById(id).style.display = (t===tab) ? "block" : "none";
-    document.getElementById("tab"+t[0].toUpperCase()+t.slice(1)).classList.toggle("active", t===tab);
-  }
+  document.getElementById("panelHubs").style.display = (tab==="hubs") ? "block" : "none";
+  document.getElementById("panelCars").style.display = (tab==="cars") ? "block" : "none";
+  document.getElementById("tabHubs").classList.toggle("active", tab==="hubs");
+  document.getElementById("tabCars").classList.toggle("active", tab==="cars");
 }
-
-map.on("click", (e) => {
-  document.getElementById("hubLat").value = e.latlng.lat.toFixed(6);
-  document.getElementById("hubLng").value = e.latlng.lng.toFixed(6);
-});
 
 async function api(url, opts={}){
   const headers = Object.assign({}, opts.headers || {});
@@ -199,133 +229,189 @@ function option(id, text){
   return o;
 }
 
-async function loadAll(){
-  try {
-    const h = await api("/api/admin/hubs");
-    hubs = h.hubs || [];
-    document.getElementById("hubsList").textContent = "Хабов: " + hubs.length;
-
-    // fill selects
-    const cn = hubs.filter(x=>x.country==="CN");
-    const ru = hubs.filter(x=>x.country==="RU");
-
-    const fill = (selId, list, allowEmpty) => {
-      const sel = document.getElementById(selId);
-      sel.innerHTML = "";
-      if (allowEmpty) sel.appendChild(option("", "— (нет) —"));
-      for (const x of list) sel.appendChild(option(x.id, `${x.name_ru} [${x.code}]`));
-    };
-
-    fill("carStartHub", cn, false);
-    fill("carMid1Hub", cn, true);
-    fill("carMid2Hub", cn, true);
-    fill("carBorderHub", cn, false); // граница может быть CN-хабом (например Хэйхэ)
-
-    // routes
-    const r = await api("/api/admin/routes");
-    routes = r.routes || [];
-    const routeSel = document.getElementById("carRouteRu");
-    routeSel.innerHTML = "";
-    routeSel.appendChild(option("", "— выберите маршрут РФ —"));
-    for (const rt of routes) routeSel.appendChild(option(rt.id, rt.name));
-
-    // routes builder checkboxes (RU hubs)
-    const box = document.getElementById("routeHubsRU");
-    box.innerHTML = "";
-    for (const x of ru) {
-      const div = document.createElement("div");
-      div.innerHTML = `<label style="display:flex;gap:8px;align-items:center;margin:6px 0">
-        <input type="checkbox" value="${x.id}"> ${x.name_ru} [${x.code}]
-      </label>`;
-      box.appendChild(div);
-    }
-
-    // list routes
-    document.getElementById("routesList").innerHTML =
-      routes.map(rt=>`<div>• ${rt.name} (${rt.hub_ids.length} точек)</div>`).join("");
-
-    document.getElementById("routeMsg").textContent = "";
-    document.getElementById("carMsg").textContent = "";
-
-  } catch(e){
-    alert(e.message + "\nПроверьте пароль (ADMIN_PASS) и переменные окружения.");
-  }
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = (x) => x * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const s = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-async function createHub(){
+function hubEmoji(type) {
+  if (type === "border") return "🚧";
+  if (type === "office") return "🏢";
+  return "🏭";
+}
+
+function makeHubIcon(hub, active) {
+  const emoji = hubEmoji(hub.type);
+  const cls = active ? "hubIcon active" : "hubIcon";
+  return L.divIcon({
+    html: `<div class="${cls}">${emoji}</div>`,
+    className: "",
+    iconSize: [28,28],
+    iconAnchor: [14,14]
+  });
+}
+
+function makeCarIcon() {
+  return L.divIcon({
+    html: `<div class="carIcon">🚗</div>`,
+    className: "",
+    iconSize: [18,18],
+    iconAnchor: [9,9]
+  });
+}
+
+function parseLocalDatetimeToISO(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function isoToLocalDatetime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n)=>String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* ================= FORMS ================= */
+map.on("click", (e) => {
+  // только для режима Хабы: клик по карте ставит координаты
+  if (document.getElementById("panelHubs").style.display !== "none") {
+    document.getElementById("hubLat").value = e.latlng.lat.toFixed(6);
+    document.getElementById("hubLng").value = e.latlng.lng.toFixed(6);
+  }
+});
+
+function resetHubForm(){
+  document.getElementById("hubId").value = "";
+  document.getElementById("hubCode").value = "";
+  document.getElementById("hubNameRu").value = "";
+  document.getElementById("hubType").value = "hub";
+  document.getElementById("hubDwell").value = "0.5";
+  document.getElementById("hubMsg").textContent = "";
+}
+
+function fillHubForm(h){
+  document.getElementById("hubId").value = h.id;
+  document.getElementById("hubLat").value = Number(h.lat).toFixed(6);
+  document.getElementById("hubLng").value = Number(h.lng).toFixed(6);
+  document.getElementById("hubCountry").value = h.country;
+  document.getElementById("hubCode").value = h.code;
+  document.getElementById("hubNameRu").value = h.name_ru;
+  document.getElementById("hubType").value = h.type || "hub";
+  document.getElementById("hubDwell").value = String(h.dwell_days ?? 0.5);
+}
+
+async function saveHub(){
   const msg = document.getElementById("hubMsg");
   msg.textContent = "";
   try{
     const payload = {
+      id: document.getElementById("hubId").value || undefined,
       country: document.getElementById("hubCountry").value,
       code: document.getElementById("hubCode").value,
       name_ru: document.getElementById("hubNameRu").value,
+      type: document.getElementById("hubType").value,
       lat: document.getElementById("hubLat").value,
       lng: document.getElementById("hubLng").value,
       dwell_days: document.getElementById("hubDwell").value || 0.5
     };
-    await api("/api/admin/hubs", { method:"POST", json: payload });
-    msg.innerHTML = "<span class='ok'>Хаб создан</span>";
+
+    if (!payload.code || !payload.name_ru || payload.lat==="" || payload.lng==="") {
+      throw new Error("Заполните код, название и координаты");
+    }
+
+    if (payload.id) {
+      await api("/api/admin/hubs", { method:"PATCH", json: payload });
+      msg.innerHTML = "<span class='ok'>Хаб обновлён</span>";
+    } else {
+      await api("/api/admin/hubs", { method:"POST", json: payload });
+      msg.innerHTML = "<span class='ok'>Хаб создан</span>";
+    }
+
     await loadAll();
+    resetHubForm();
   }catch(e){
     msg.innerHTML = "<span class='err'>"+e.message+"</span>";
   }
 }
 
-async function createRoute(){
-  const msg = document.getElementById("routeMsg");
-  msg.textContent = "";
-  try{
-    const name = document.getElementById("routeName").value.trim();
-    const checks = Array.from(document.querySelectorAll("#routeHubsRU input[type=checkbox]:checked"));
-    const hub_ids = checks.map(c=>c.value);
-    await api("/api/admin/routes", { method:"POST", json:{ name, hub_ids } });
-    msg.innerHTML = "<span class='ok'>Маршрут создан</span>";
-    await loadAll();
-  }catch(e){
-    msg.innerHTML = "<span class='err'>"+e.message+"</span>";
-  }
+function resetCarForm(){
+  document.getElementById("carId").value = "";
+  document.getElementById("carVin").value = "";
+  document.getElementById("carContract").value = "";
+  document.getElementById("carBrand").value = "";
+  document.getElementById("carModel").value = "";
+  document.getElementById("carPhoto").value = "";
+  document.getElementById("carUrgency").value = "std";
+  document.getElementById("carStartTime").value = "";
+  document.getElementById("carPublic").value = "true";
+  document.getElementById("carMsg").textContent = "";
 }
 
-async function createCar(){
+function fillCarForm(c){
+  document.getElementById("carId").value = c.id;
+  document.getElementById("carVin").value = c.vin || "";
+  document.getElementById("carContract").value = c.contract_no || "";
+  document.getElementById("carBrand").value = c.brand || "";
+  document.getElementById("carModel").value = c.model || "";
+  document.getElementById("carPhoto").value = c.photo_url || "";
+  document.getElementById("carUrgency").value = c.urgency || "std";
+  document.getElementById("carStartTime").value = isoToLocalDatetime(c.start_time);
+  document.getElementById("carPublic").value = String(!!c.public);
+  // маршрут селектов выставим при loadAll (по хабам), здесь просто запомним
+  window.__editingRoute = Array.isArray(c.route_hub_ids) ? c.route_hub_ids.slice() : [];
+}
+
+async function saveCar(){
   const msg = document.getElementById("carMsg");
   msg.textContent = "";
   try{
-    const vin = document.getElementById("carVin").value.trim();
-    const contract_no = document.getElementById("carContract").value.trim();
-
-    const start = document.getElementById("carStartTime").value; // local datetime
-    if (!start) throw new Error("Укажите дату/время старта");
-    // convert to ISO (treat as local)
-    const start_time = new Date(start).toISOString();
+    const id = document.getElementById("carId").value || "";
+    const start_time = parseLocalDatetimeToISO(document.getElementById("carStartTime").value);
+    if (!start_time) throw new Error("Укажите дату/время старта");
 
     const startHub = document.getElementById("carStartHub").value;
     const mid1 = document.getElementById("carMid1Hub").value;
     const mid2 = document.getElementById("carMid2Hub").value;
     const border = document.getElementById("carBorderHub").value;
-    const routeRuId = document.getElementById("carRouteRu").value;
 
-    // get selected RU template
-    const rt = routes.find(x=>x.id===routeRuId);
-    const ruHubs = rt ? rt.hub_ids : [];
-
-    // build full route: CN hubs + RU template
-    const route_hub_ids = [startHub, mid1, mid2, border].filter(Boolean).concat(ruHubs);
-    if (route_hub_ids.length < 2) throw new Error("Маршрут слишком короткий");
+    const route_hub_ids = [startHub, mid1, mid2, border].filter(Boolean);
+    if (route_hub_ids.length < 2) throw new Error("Маршрут должен содержать минимум 2 точки");
 
     const payload = {
-      vin, contract_no,
-      brand: document.getElementById("carBrand").value,
-      model: document.getElementById("carModel").value,
-      photo_url: document.getElementById("carPhoto").value,
+      id: id || undefined,
+      vin: document.getElementById("carVin").value.trim(),
+      contract_no: document.getElementById("carContract").value.trim(),
+      brand: document.getElementById("carBrand").value.trim(),
+      model: document.getElementById("carModel").value.trim(),
+      photo_url: document.getElementById("carPhoto").value.trim(),
       urgency: document.getElementById("carUrgency").value,
       start_time,
       route_hub_ids,
-      public: true
+      public: document.getElementById("carPublic").value === "true"
     };
 
-    await api("/api/admin/cars", { method:"POST", json: payload });
-    msg.innerHTML = "<span class='ok'>Авто создано</span>";
+    if (!payload.vin || !payload.contract_no) throw new Error("Нужны VIN и № договора");
+
+    if (id) {
+      await api("/api/admin/cars", { method:"PATCH", json: payload });
+      msg.innerHTML = "<span class='ok'>Авто обновлено</span>";
+    } else {
+      await api("/api/admin/cars", { method:"POST", json: payload });
+      msg.innerHTML = "<span class='ok'>Авто создано</span>";
+    }
+
+    await loadAll();
+    resetCarForm();
   }catch(e){
     msg.innerHTML = "<span class='err'>"+e.message+"</span>";
   }
@@ -339,17 +425,31 @@ async function searchCars(){
     const r = await api("/api/admin/cars?q=" + encodeURIComponent(q));
     const list = r.cars || [];
     out.innerHTML = list.map(c => {
-      return `<div style="border-top:1px dashed #eee;padding:8px 0">
-        <b>${c.brand || ""} ${c.model || ""}</b><br/>
+      return `<div class="listItem">
+        <b>${(c.brand||"")} ${(c.model||"")}</b>
+        <span class="pill">${c.urgency === "fast" ? "Ускоренная" : "Стандарт"}</span>
+        <br/>
         <span class="small">VIN: ${c.vin} | Договор: ${c.contract_no}</span><br/>
-        <span class="small">public: ${c.public} | deleted: ${c.is_deleted} | urgency: ${c.urgency}</span><br/>
-        <button onclick="togglePublic('${c.id}', ${!c.public})">${c.public ? "Скрыть" : "Показать"}</button>
-        <button onclick="setDeleted('${c.id}', true)">Удалить</button>
+        <span class="small muted">public: ${c.public} | deleted: ${c.is_deleted}</span><br/>
+        <div class="row" style="margin-top:6px">
+          <button onclick="editCar('${c.id}')">Редактировать</button>
+          <button onclick="togglePublic('${c.id}', ${!c.public})">${c.public ? "Скрыть" : "Показать"}</button>
+          <button onclick="setDeleted('${c.id}', true)">Удалить</button>
+        </div>
       </div>`;
     }).join("");
+    // сохраним для edit
+    window.__carsSearchCache = list;
   }catch(e){
     out.innerHTML = "<span class='err'>"+e.message+"</span>";
   }
+}
+
+function editCar(id){
+  const c = (window.__carsSearchCache || []).find(x=>x.id===id);
+  if (!c) return;
+  fillCarForm(c);
+  showTab("cars");
 }
 
 async function togglePublic(id, val){
@@ -362,7 +462,87 @@ async function setDeleted(id, val){
   await searchCars();
 }
 
+/* ================= MAP RENDER ================= */
+function renderHubsOnMap(){
+  hubLayer.clearLayers();
+  hubMarkersById.clear();
+
+  for (const h of hubs) {
+    if (typeof h.lat !== "number" || typeof h.lng !== "number") continue;
+
+    const isActive = carsCache.some(c =>
+      c.pos && haversineKm(c.pos, { lat:h.lat, lng:h.lng }) < ACTIVE_HUB_RADIUS_KM
+    );
+
+    const mk = L.marker([h.lat, h.lng], { icon: makeHubIcon(h, isActive) })
+      .bindTooltip(`${h.name_ru || "Хаб"}${isActive ? " • активный" : ""}`, { direction:"top", offset:[0,-10] });
+
+    mk.on("click", () => {
+      fillHubForm(h);
+      showTab("hubs");
+    });
+
+    hubMarkersById.set(h.id, mk);
+    hubLayer.addLayer(mk);
+  }
+}
+
+function renderCarsOnMap(){
+  carLayer.clearLayers();
+  carMarkersById.clear();
+
+  // Для админки используем публичный API (позиции посчитаны), без приватных данных
+  for (const c of carsCache) {
+    if (!c.pos) continue;
+
+    const mk = L.marker([c.pos.lat, c.pos.lng], { icon: makeCarIcon() })
+      .bindPopup(`<b>${(c.brand||"")} ${(c.model||"")}</b><br/><span class="small">${c.status||""}</span>`);
+
+    mk.on("click", () => {
+      // поиск авто по id в админке: просто подставим поиск (удобно)
+      document.getElementById("carSearch").value = "";
+      showTab("cars");
+    });
+
+    carMarkersById.set(c.id, mk);
+    carLayer.addLayer(mk);
+  }
+}
+
+/* ================= LOAD ALL ================= */
+async function loadAll(){
+  try {
+    // 1) hubs from admin API
+    const h = await api("/api/admin/hubs");
+    hubs = h.hubs || [];
+    document.getElementById("hubsList").textContent = "Хабов: " + hubs.length;
+
+    // 2) cars positions from public API (чтобы подсветить активные хабы и показать машины на карте)
+    const pub = await fetch("/api/public", { cache:"no-store" }).then(r=>r.json());
+    carsCache = (pub.cars || []).filter(x=>x.pos);
+
+    // fill hub selects for cars (CN hubs)
+    const cn = hubs.filter(x=>x.country==="CN");
+    const fill = (selId, list, allowEmpty) => {
+      const sel = document.getElementById(selId);
+      sel.innerHTML = "";
+      if (allowEmpty) sel.appendChild(option("", "— (нет) —"));
+      for (const x of list) sel.appendChild(option(x.id, `${x.name_ru} [${x.code}]`));
+    };
+    fill("carStartHub", cn, false);
+    fill("carMid1Hub", cn, true);
+    fill("carMid2Hub", cn, true);
+    fill("carBorderHub", cn, false);
+
+    renderHubsOnMap();
+    renderCarsOnMap();
+  } catch(e){
+    alert(e.message + "\nПроверьте пароль (ADMIN_PASS) и переменные окружения.");
+  }
+}
+
 loadAll();
+setInterval(loadAll, 60_000);
 </script>
 </body>
 </html>
