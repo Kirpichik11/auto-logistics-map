@@ -9,14 +9,14 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- MarkerCluster -->
+  <!-- MarkerCluster (2 CSS + 1 JS) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 
   <style>
     body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .wrap { display:grid; grid-template-columns: 1fr 400px; height:100vh; }
+    .wrap { display:grid; grid-template-columns: 1fr 420px; height:100vh; }
     #map { height:100vh; }
     .side { border-left:1px solid #eee; padding:12px; overflow:auto; background:#fff; }
     .title { font-size:16px; font-weight:700; margin:0 0 8px; }
@@ -42,26 +42,43 @@
     .bar > div { height:100%; background:#111; border-radius:999px; }
     .listMeta { font-size:12px; color:#666; margin-top:6px; display:flex; justify-content:space-between; gap:10px; }
 
-    /* Icons */
-    .carIcon { font-size:18px; transform: translate(-6px,-10px); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25)); user-select:none; }
-    .carIcon.sel { font-size:18px; }
+    /* ===== Icon sizes (по запросу) =====
+       Hub: 28px -> 17px  (минус ~40%)
+       Car: 28px -> 36px  (плюс ~30%)
+    */
+    .carIcon { font-size: 24px; user-select:none; line-height:1; }
     .carWrap {
-      width:28px; height:28px; border-radius:50%;
+      width: 36px; height: 36px; border-radius: 50%;
       display:flex; align-items:center; justify-content:center;
-      border:2px solid #444; background:#fff;
-      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
+      border: 2px solid #444; background:#fff;
+      /* drop-shadow -> box-shadow (стабильнее на iOS) */
+      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+      /* fix for iOS emoji compositing */
+      transform: translateZ(0);
+      -webkit-transform: translateZ(0);
+      will-change: transform;
     }
     .carWrap.sel { border-color:#000; background:#111; color:#fff; }
 
     .hubIcon {
-      font-size:18px;
-      width:28px; height:28px; border-radius:50%;
+      font-size: 12px; user-select:none; line-height:1;
+      width: 17px; height: 17px; border-radius: 50%;
       display:flex; align-items:center; justify-content:center;
-      background:#e0e0e0; border:2px solid #555;
-      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
-      user-select:none;
+      background:#e0e0e0; border: 2px solid #555;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+      transform: translateZ(0);
+      -webkit-transform: translateZ(0);
+      will-change: transform;
     }
     .hubIcon.active { background:#333; border-color:#000; color:#fff; }
+
+    /* эмодзи отдельно — чтобы не исчезали при наложении */
+    .hubEmoji, .carEmoji {
+      display:block;
+      transform: translateZ(0);
+      -webkit-transform: translateZ(0);
+      will-change: transform;
+    }
 
     .img { width:88px; height:66px; border-radius:10px; background:#f3f3f3; object-fit:cover; }
 
@@ -98,7 +115,6 @@
     </div>
 
     <div id="carList"></div>
-
     <div id="details"></div>
   </div>
 </div>
@@ -118,9 +134,23 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 19, attribution: ''
 }).addTo(map);
 
+/**
+ * Разводим слои (pane), чтобы:
+ * - хабы всегда рисовались корректно
+ * - машины лежали выше хабов
+ * - на iOS/Telegram не пропадали эмодзи при наложении
+ */
+map.createPane("hubPane");
+map.getPane("hubPane").style.zIndex = 410;
+
+map.createPane("carPane");
+map.getPane("carPane").style.zIndex = 420;
+
+// кластеризация машин
 const cluster = L.markerClusterGroup();
 map.addLayer(cluster);
 
+// слой хабов
 const hubLayer = L.layerGroup().addTo(map);
 
 let cars = [];
@@ -173,14 +203,17 @@ function hubEmoji(type) {
 /* ================= ICONS ================= */
 function makeCarIcon(isSelected) {
   const wrapCls = isSelected ? "carWrap sel" : "carWrap";
-  const emojiCls = isSelected ? "carIcon sel" : "carIcon";
-  const html = `<div class="${wrapCls}"><div class="${emojiCls}">🚗</div></div>`;
-  return L.divIcon({ html, className:"", iconSize:[28,28], iconAnchor:[14,14] });
+  const html = `<div class="${wrapCls}"><span class="carEmoji carIcon">🚗</span></div>`;
+  // iconSize и anchor соответствуют 36x36
+  return L.divIcon({ html, className:"", iconSize:[36,36], iconAnchor:[18,18] });
 }
+
 function makeHubIcon(hub, active) {
   const emoji = hubEmoji(hub.type);
   const cls = active ? "hubIcon active" : "hubIcon";
-  return L.divIcon({ html:`<div class="${cls}">${emoji}</div>`, className:"", iconSize:[28,28], iconAnchor:[14,14] });
+  const html = `<div class="${cls}"><span class="hubEmoji">${emoji}</span></div>`;
+  // iconSize и anchor соответствуют 17x17
+  return L.divIcon({ html, className:"", iconSize:[17,17], iconAnchor:[8,8] });
 }
 
 /* ================= UI ================= */
@@ -188,6 +221,7 @@ function showCarDetails(car) {
   const el = document.getElementById("details");
   const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
   const pct = Math.round(((car.progress ?? 0) * 100));
+
   el.innerHTML = `
     <div class="card">
       <div class="row" style="align-items:flex-start">
@@ -209,17 +243,14 @@ function showCarDetails(car) {
 function selectCarById(id) {
   selectedCarId = id || null;
 
-  // обновим список и маркеры
   renderCarList();
   upsertMarkers();
 
   const car = cars.find(c => c.id === selectedCarId);
   if (!car || !car.pos) return;
 
-  // фокус на карте
   map.setView([car.pos.lat, car.pos.lng], Math.max(map.getZoom(), 6), { animate:true });
 
-  // popup
   const mk = markersByCarId.get(car.id);
   if (mk) mk.openPopup();
 
@@ -229,7 +260,7 @@ function selectCarById(id) {
 /* ================= LIST ================= */
 function renderCarList() {
   const el = document.getElementById("carList");
-  // сортировка: выбранный сверху, затем по прогрессу
+
   const list = [...cars].sort((a,b) => {
     if (a.id === selectedCarId) return -1;
     if (b.id === selectedCarId) return 1;
@@ -279,8 +310,12 @@ function renderHubs() {
     );
 
     const mk = L.marker([h.lat, h.lng], {
-      icon: makeHubIcon(h, isActive)
-    }).bindTooltip(`${escapeHtml(h.name_ru || "Хаб")}${isActive ? " • активный" : ""}`, { direction:"top", offset:[0,-10] });
+      icon: makeHubIcon(h, isActive),
+      pane: "hubPane"
+    }).bindTooltip(
+      `${escapeHtml(h.name_ru || "Хаб")}${isActive ? " • активный" : ""}`,
+      { direction:"top", offset:[0,-10] }
+    );
 
     hubLayer.addLayer(mk);
   }
@@ -296,7 +331,6 @@ function buildPopup(car) {
 }
 
 function upsertMarkers() {
-  // remove old
   const ids = new Set(cars.map(c => c.id));
   for (const [id, mk] of markersByCarId.entries()) {
     if (!ids.has(id)) {
@@ -312,7 +346,10 @@ function upsertMarkers() {
     let marker = markersByCarId.get(car.id);
 
     if (!marker) {
-      marker = L.marker([car.pos.lat, car.pos.lng], { icon: makeCarIcon(isSel) });
+      marker = L.marker([car.pos.lat, car.pos.lng], {
+        icon: makeCarIcon(isSel),
+        pane: "carPane"
+      });
       marker.bindPopup(buildPopup(car));
       marker.on("click", () => selectCarById(car.id));
       markersByCarId.set(car.id, marker);
@@ -328,20 +365,15 @@ function upsertMarkers() {
 /* ================= DATA ================= */
 async function loadData() {
   const resp = await fetch(WORKER_PUBLIC_URL, { cache:"no-store" });
-  if (!resp.ok) throw new Error("Failed to load data");
   const data = await resp.json();
 
   hubs = (data.hubs || []);
   cars = (data.cars || []).filter(c => c.pos && typeof c.pos.lat === "number");
 
-  // если progress пока не приходит — пусть будет 0
-  for (const c of cars) if (typeof c.progress !== "number") c.progress = 0;
-
   renderHubs();
   upsertMarkers();
   renderCarList();
 
-  // если выбранная машина исчезла — сброс
   if (selectedCarId && !cars.some(c => c.id === selectedCarId)) {
     selectedCarId = null;
     document.getElementById("details").innerHTML = "";
@@ -368,7 +400,6 @@ async function doSearch() {
     if (!r.ok) throw new Error(data.error || "Не найдено");
 
     const found = data.car;
-    // Если авто не было в общем списке (например скрыто), добавим временно в массив
     const idx = cars.findIndex(c => c.id === found.id);
     if (idx === -1) cars.unshift(found);
     else cars[idx] = found;
@@ -394,7 +425,7 @@ document.getElementById("searchInput").addEventListener("keydown", (e) => {
     await loadData();
   } catch(e) {
     console.error(e);
-    alert("Не удалось загрузить данные. Проверьте /api/public.");
+    alert("Не удалось загрузить данные. Проверьте /api/public и консоль.");
     return;
   }
   setInterval(() => loadData().catch(console.error), REFRESH_DATA_MS);
@@ -402,4 +433,3 @@ document.getElementById("searchInput").addEventListener("keydown", (e) => {
 </script>
 </body>
 </html>
-
