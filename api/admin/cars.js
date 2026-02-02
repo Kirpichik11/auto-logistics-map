@@ -25,9 +25,9 @@ export default async function handler(req, res) {
 
     let query = db
       .from("cars")
-      .select("id,vin,contract_no,brand,model,public,urgency,start_time,route_hub_ids,is_deleted,created_at")
+      .select("id,vin,contract_no,brand,model,photo_url,public,urgency,start_time,route_hub_ids,is_deleted,created_at")
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(300);
 
     if (q) query = query.or(`vin.ilike.%${q}%,contract_no.ilike.%${q}%`);
 
@@ -68,12 +68,33 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "PATCH") {
-    const { id, is_deleted, public: isPublic } = req.body || {};
+    const {
+      id,
+      vin, contract_no,
+      brand, model, photo_url,
+      urgency, start_time, route_hub_ids,
+      public: isPublic,
+      is_deleted
+    } = req.body || {};
+
     if (!id) return res.status(400).json({ error: "Нет id" });
 
     const patch = {};
-    if (typeof is_deleted === "boolean") patch.is_deleted = is_deleted;
+    if (vin != null) patch.vin = String(vin).trim().toUpperCase();
+    if (contract_no != null) patch.contract_no = String(contract_no).trim();
+    if (brand != null) patch.brand = String(brand).trim();
+    if (model != null) patch.model = String(model).trim();
+    if (photo_url != null) patch.photo_url = String(photo_url).trim();
+    if (urgency != null) patch.urgency = urgency === "fast" ? "fast" : "std";
+    if (start_time != null) patch.start_time = start_time;
+    if (route_hub_ids != null) {
+      if (!Array.isArray(route_hub_ids) || route_hub_ids.length < 2) {
+        return res.status(400).json({ error: "Маршрут должен содержать минимум 2 точки" });
+      }
+      patch.route_hub_ids = route_hub_ids;
+    }
     if (typeof isPublic === "boolean") patch.public = isPublic;
+    if (typeof is_deleted === "boolean") patch.is_deleted = is_deleted;
 
     const { data, error } = await db.from("cars").update(patch).eq("id", id).select().single();
     if (error) return res.status(500).json({ error: error.message });
