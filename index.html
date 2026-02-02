@@ -325,7 +325,9 @@ async function loadData() {
   const data = await resp.json();
 
   hubsById = new Map((data.hubs || []).map(h => [h.id, h]));
-  cars = (data.cars || []).filter(c => c.start_hub && c.end_hub && c.start_time);
+  cars = (data.cars || []).filter(
+  c => c.pos && typeof c.pos.lat === "number" && typeof c.pos.lng === "number"
+);
 
   upsertMarkers();
 }
