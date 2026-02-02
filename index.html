@@ -42,38 +42,45 @@
     .bar > div { height:100%; background:#111; border-radius:999px; }
     .listMeta { font-size:12px; color:#666; margin-top:6px; display:flex; justify-content:space-between; gap:10px; }
 
-    /* ===== Icon sizes (по запросу) =====
+    /* ===== Icon sizes =====
        Hub: 28px -> 17px  (минус ~40%)
-       Car: 28px -> 36px  (плюс ~30%)
+       Car: 18px -> 24px  (плюс ~30% от 18)
     */
-    .carIcon { font-size: 24px; user-select:none; line-height:1; }
-    .carWrap {
-      width: 36px; height: 36px; border-radius: 50%;
-      display:flex; align-items:center; justify-content:center;
-      border: 2px solid #444; background:#fff;
-      /* drop-shadow -> box-shadow (стабильнее на iOS) */
-      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
-      /* fix for iOS emoji compositing */
+
+    /* Машина: БЕЗ круга, просто эмодзи */
+    .carEmoji {
+      font-size: 24px;            /* было 18 → стало 24 (≈ +33%) */
+      line-height: 1;
+      user-select:none;
+      /* вместо drop-shadow — text-shadow (стабильнее на iOS) */
+      text-shadow: 0 1px 2px rgba(0,0,0,0.25);
       transform: translateZ(0);
       -webkit-transform: translateZ(0);
       will-change: transform;
     }
-    .carWrap.sel { border-color:#000; background:#111; color:#fff; }
 
+    /* Хабы: маленькие круги */
     .hubIcon {
-      font-size: 12px; user-select:none; line-height:1;
-      width: 17px; height: 17px; border-radius: 50%;
-      display:flex; align-items:center; justify-content:center;
-      background:#e0e0e0; border: 2px solid #555;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+      font-size: 12px;
+      line-height: 1;
+      width: 17px;
+      height: 17px;
+      border-radius: 50%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background:#e0e0e0;
+      border: 2px solid #555;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.25); /* вместо filter */
+      user-select:none;
       transform: translateZ(0);
       -webkit-transform: translateZ(0);
       will-change: transform;
     }
     .hubIcon.active { background:#333; border-color:#000; color:#fff; }
 
-    /* эмодзи отдельно — чтобы не исчезали при наложении */
-    .hubEmoji, .carEmoji {
+    /* эмодзи отдельно — фикс “пропадания” на iOS */
+    .hubEmoji {
       display:block;
       transform: translateZ(0);
       -webkit-transform: translateZ(0);
@@ -129,17 +136,11 @@ const ACTIVE_HUB_RADIUS_KM = 10;
 /* ================= MAP ================= */
 const map = L.map('map', { preferCanvas:true }).setView([50.5, 127.5], 4);
 
-// нейтральная карта
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 19, attribution: ''
 }).addTo(map);
 
-/**
- * Разводим слои (pane), чтобы:
- * - хабы всегда рисовались корректно
- * - машины лежали выше хабов
- * - на iOS/Telegram не пропадали эмодзи при наложении
- */
+// Pane'ы: хабы ниже, машины выше (и фикс iOS наложений)
 map.createPane("hubPane");
 map.getPane("hubPane").style.zIndex = 410;
 
@@ -202,17 +203,17 @@ function hubEmoji(type) {
 
 /* ================= ICONS ================= */
 function makeCarIcon(isSelected) {
-  const wrapCls = isSelected ? "carWrap sel" : "carWrap";
-  const html = `<div class="${wrapCls}"><span class="carEmoji carIcon">🚗</span></div>`;
-  // iconSize и anchor соответствуют 36x36
-  return L.divIcon({ html, className:"", iconSize:[36,36], iconAnchor:[18,18] });
+  // Без круга. Для выбранного — просто чуть больше.
+  const size = isSelected ? 26 : 24;
+  const html = `<span class="carEmoji" style="font-size:${size}px">🚗</span>`;
+  // iconSize/anchor соответствуют реальной зоне клика
+  return L.divIcon({ html, className:"", iconSize:[30,30], iconAnchor:[15,15] });
 }
 
 function makeHubIcon(hub, active) {
   const emoji = hubEmoji(hub.type);
   const cls = active ? "hubIcon active" : "hubIcon";
   const html = `<div class="${cls}"><span class="hubEmoji">${emoji}</span></div>`;
-  // iconSize и anchor соответствуют 17x17
   return L.divIcon({ html, className:"", iconSize:[17,17], iconAnchor:[8,8] });
 }
 
@@ -433,3 +434,4 @@ document.getElementById("searchInput").addEventListener("keydown", (e) => {
 </script>
 </body>
 </html>
+
