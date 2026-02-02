@@ -11,55 +11,58 @@
 
   <!-- MarkerCluster -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .wrap { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
-    #map { height: 100vh; }
-    .side { border-left: 1px solid #eee; padding: 12px; overflow: auto; background:#fff; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .wrap { display:grid; grid-template-columns: 1fr 400px; height:100vh; }
+    #map { height:100vh; }
+    .side { border-left:1px solid #eee; padding:12px; overflow:auto; background:#fff; }
+    .title { font-size:16px; font-weight:700; margin:0 0 8px; }
+    .sub { font-size:12px; color:#666; margin:0 0 12px; }
 
-    .title { font-size: 16px; font-weight: 700; margin: 0 0 8px; }
-    .sub { font-size: 12px; color: #666; margin: 0 0 12px; }
+    .card { border:1px solid #eee; border-radius:12px; padding:10px; margin-bottom:10px; }
+    .row { display:flex; gap:10px; align-items:center; }
+    input { width:100%; padding:10px; border:1px solid #ddd; border-radius:10px; }
+    button { padding:10px 12px; border:1px solid #ddd; background:#fff; border-radius:10px; cursor:pointer; }
+    .hint { font-size:12px; color:#777; margin-top:6px; }
+    .small { font-size:12px; color:#666; }
+    .ok { color:#0a7; }
+    .err { color:#d33; }
 
-    .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
-
+    /* List */
     .listCard { border:1px solid #eee; border-radius:12px; padding:10px; margin-bottom:10px; cursor:pointer; }
     .listCard:hover { background:#fafafa; }
-    .listTop { display:flex; justify-content:space-between; gap:8px; }
+    .listCard.active { outline:2px solid #111; background:#fbfbfb; }
+    .listTop { display:flex; justify-content:space-between; gap:10px; }
     .listTitle { font-weight:700; font-size:13px; margin:0; }
-    .badge { font-size:11px; padding:3px 8px; border-radius:999px; background:#f6f6f6; }
-    .bar { height:6px; background:#eee; border-radius:999px; overflow:hidden; margin-top:6px; }
-    .bar > div { height:100%; background:#111; }
+    .badge { font-size:11px; padding:3px 8px; border-radius:999px; background:#f6f6f6; white-space:nowrap; }
+    .bar { height:6px; background:#eee; border-radius:999px; overflow:hidden; margin-top:8px; }
+    .bar > div { height:100%; background:#111; border-radius:999px; }
+    .listMeta { font-size:12px; color:#666; margin-top:6px; display:flex; justify-content:space-between; gap:10px; }
 
     /* Icons */
-    .carIcon {
-      font-size: 18px;
-      transform: translate(-6px, -10px);
+    .carIcon { font-size:18px; transform: translate(-6px,-10px); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25)); user-select:none; }
+    .carIcon.sel { font-size:18px; }
+    .carWrap {
+      width:28px; height:28px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      border:2px solid #444; background:#fff;
       filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
-      user-select:none;
     }
+    .carWrap.sel { border-color:#000; background:#111; color:#fff; }
 
     .hubIcon {
-      font-size: 18px;
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      background:#e0e0e0;
-      border:2px solid #555;
+      font-size:18px;
+      width:28px; height:28px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      background:#e0e0e0; border:2px solid #555;
       filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
       user-select:none;
     }
+    .hubIcon.active { background:#333; border-color:#000; color:#fff; }
 
-    .hubIcon.active {
-      background:#333;
-      border-color:#000;
-      color:#fff;
-    }
+    .img { width:88px; height:66px; border-radius:10px; background:#f3f3f3; object-fit:cover; }
 
     @media (max-width: 900px) {
       .wrap { grid-template-columns: 1fr; }
@@ -74,37 +77,82 @@
 
   <div class="side">
     <p class="title">Поставки автомобилей</p>
-    <p class="sub">Позиции и статусы обновляются автоматически</p>
+    <p class="sub">Карта ориентировочная. Статусы и позиции обновляются автоматически.</p>
 
+    <!-- SEARCH -->
+    <div class="card">
+      <b>Поиск авто</b>
+      <div class="hint">Введите VIN или № договора (минимум 6 символов).</div>
+      <div class="row" style="margin-top:8px">
+        <input id="searchInput" placeholder="VIN или № договора" />
+        <button id="searchBtn">Найти</button>
+      </div>
+      <div id="searchMsg" class="small"></div>
+    </div>
+
+    <!-- SUMMARY -->
     <div class="card">
       <div><b id="countCars">—</b> авто на карте</div>
+      <div class="hint">Нажмите на авто в списке или на карте, чтобы увидеть детали.</div>
     </div>
 
     <div id="carList"></div>
+
+    <div id="details"></div>
   </div>
 </div>
 
 <script>
 /* ================= CONFIG ================= */
 const WORKER_PUBLIC_URL = "/api/public";
+const SEARCH_URL = "/api/search?q=";
+const REFRESH_DATA_MS = 60_000;
 const ACTIVE_HUB_RADIUS_KM = 10;
 
 /* ================= MAP ================= */
-const map = L.map('map').setView([50.5, 127.5], 4);
+const map = L.map('map', { preferCanvas:true }).setView([50.5, 127.5], 4);
+
+// нейтральная карта
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-  maxZoom: 19,
-  attribution: ''
+  maxZoom: 19, attribution: ''
 }).addTo(map);
 
 const cluster = L.markerClusterGroup();
 map.addLayer(cluster);
+
 const hubLayer = L.layerGroup().addTo(map);
 
 let cars = [];
 let hubs = [];
 let markersByCarId = new Map();
+let selectedCarId = null;
 
 /* ================= UTILS ================= */
+function escapeHtml(str) {
+  return String(str || "").replace(/[&<>"']/g, (m) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"
+  }[m]));
+}
+function fmtEta(isoArrive) {
+  if (!isoArrive) return "—";
+  const t = Date.parse(isoArrive);
+  if (!t) return "—";
+  const diff = t - Date.now();
+  if (diff <= 0) return "сейчас";
+  const hours = diff / 3600000;
+  if (hours < 24) return `${Math.round(hours)} ч`;
+  const days = hours / 24;
+  return `${days.toFixed(1)} дн`;
+}
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("ru-RU");
+}
+function urgencyText(u) {
+  return u === "fast" ? "Ускоренная" : "Стандарт";
+}
 function haversineKm(a, b) {
   const R = 6371;
   const toRad = x => x * Math.PI / 180;
@@ -115,7 +163,6 @@ function haversineKm(a, b) {
   const s = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
   return 2 * R * Math.asin(Math.sqrt(s));
 }
-
 function hubEmoji(type) {
   if (type === "border") return "🚧";
   if (type === "office") return "🏢";
@@ -123,51 +170,134 @@ function hubEmoji(type) {
 }
 
 /* ================= ICONS ================= */
-function makeCarIcon() {
-  return L.divIcon({
-    html: `<div class="carIcon">🚗</div>`,
-    className: "",
-    iconSize: [18,18],
-    iconAnchor: [9,9]
-  });
+function makeCarIcon(isSelected) {
+  const wrapCls = isSelected ? "carWrap sel" : "carWrap";
+  const emojiCls = isSelected ? "carIcon sel" : "carIcon";
+  const html = `<div class="${wrapCls}"><div class="${emojiCls}">🚗</div></div>`;
+  return L.divIcon({ html, className:"", iconSize:[28,28], iconAnchor:[14,14] });
 }
-
 function makeHubIcon(hub, active) {
   const emoji = hubEmoji(hub.type);
   const cls = active ? "hubIcon active" : "hubIcon";
-  return L.divIcon({
-    html: `<div class="${cls}">${emoji}</div>`,
-    className: "",
-    iconSize: [28,28],
-    iconAnchor: [14,14]
-  });
+  return L.divIcon({ html:`<div class="${cls}">${emoji}</div>`, className:"", iconSize:[28,28], iconAnchor:[14,14] });
 }
 
-/* ================= RENDER HUBS ================= */
+/* ================= UI ================= */
+function showCarDetails(car) {
+  const el = document.getElementById("details");
+  const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
+  const pct = Math.round(((car.progress ?? 0) * 100));
+  el.innerHTML = `
+    <div class="card">
+      <div class="row" style="align-items:flex-start">
+        ${car.photo_url ? `<img class="img" src="${car.photo_url}" alt="auto" />` : `<div class="img"></div>`}
+        <div style="flex:1">
+          <div style="font-weight:700">${escapeHtml(title)}</div>
+          <div class="small"><span class="hint" style="margin:0">Срочность:</span> ${escapeHtml(urgencyText(car.urgency))}</div>
+          <div class="small"><span class="hint" style="margin:0">Статус:</span> ${escapeHtml(car.status || "—")}</div>
+          <div class="small"><span class="hint" style="margin:0">Осталось:</span> ${escapeHtml(fmtEta(car.arrive_time))}</div>
+          <div class="small"><span class="hint" style="margin:0">Прибытие:</span> ${escapeHtml(fmtDate(car.arrive_time))}</div>
+        </div>
+      </div>
+      <div class="bar" style="margin-top:10px"><div style="width:${pct}%"></div></div>
+      <div class="small" style="margin-top:6px">Прогресс: ${pct}%</div>
+    </div>
+  `;
+}
+
+function selectCarById(id) {
+  selectedCarId = id || null;
+
+  // обновим список и маркеры
+  renderCarList();
+  upsertMarkers();
+
+  const car = cars.find(c => c.id === selectedCarId);
+  if (!car || !car.pos) return;
+
+  // фокус на карте
+  map.setView([car.pos.lat, car.pos.lng], Math.max(map.getZoom(), 6), { animate:true });
+
+  // popup
+  const mk = markersByCarId.get(car.id);
+  if (mk) mk.openPopup();
+
+  showCarDetails(car);
+}
+
+/* ================= LIST ================= */
+function renderCarList() {
+  const el = document.getElementById("carList");
+  // сортировка: выбранный сверху, затем по прогрессу
+  const list = [...cars].sort((a,b) => {
+    if (a.id === selectedCarId) return -1;
+    if (b.id === selectedCarId) return 1;
+    return (b.progress ?? 0) - (a.progress ?? 0);
+  });
+
+  el.innerHTML = list.map(car => {
+    const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
+    const pct = Math.round((car.progress ?? 0) * 100);
+    const eta = fmtEta(car.arrive_time);
+    const badge = urgencyText(car.urgency);
+    const activeCls = car.id === selectedCarId ? "listCard active" : "listCard";
+
+    return `
+      <div class="${activeCls}" data-id="${car.id}">
+        <div class="listTop">
+          <p class="listTitle">${escapeHtml(title)}</p>
+          <span class="badge">${escapeHtml(badge)}</span>
+        </div>
+        <div class="bar"><div style="width:${pct}%"></div></div>
+        <div class="listMeta">
+          <span>${escapeHtml(car.status || "—")}</span>
+          <span>ETA: ${escapeHtml(eta)}</span>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  for (const node of el.querySelectorAll(".listCard")) {
+    node.addEventListener("click", () => {
+      selectCarById(node.getAttribute("data-id"));
+    });
+  }
+
+  document.getElementById("countCars").textContent = String(cars.length);
+}
+
+/* ================= HUBS ================= */
 function renderHubs() {
   hubLayer.clearLayers();
 
   for (const h of hubs) {
-    if (!h.lat || !h.lng) continue;
+    if (typeof h.lat !== "number" || typeof h.lng !== "number") continue;
 
     const isActive = cars.some(c =>
-      c.pos &&
-      haversineKm(c.pos, { lat:h.lat, lng:h.lng }) < ACTIVE_HUB_RADIUS_KM
+      c.pos && haversineKm(c.pos, { lat:h.lat, lng:h.lng }) < ACTIVE_HUB_RADIUS_KM
     );
 
     const mk = L.marker([h.lat, h.lng], {
       icon: makeHubIcon(h, isActive)
-    }).bindTooltip(h.name_ru || "Хаб", { direction:"top", offset:[0,-10] });
+    }).bindTooltip(`${escapeHtml(h.name_ru || "Хаб")}${isActive ? " • активный" : ""}`, { direction:"top", offset:[0,-10] });
 
     hubLayer.addLayer(mk);
   }
 }
 
 /* ================= MARKERS ================= */
-function upsertMarkers() {
-  const ids = new Set(cars.map(c => c.id));
+function buildPopup(car) {
+  const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
+  return `
+    <b>${escapeHtml(title)}</b><br/>
+    <span style="font-size:12px;color:#666">Статус: ${escapeHtml(car.status || "—")}</span>
+  `;
+}
 
-  for (const [id, mk] of markersByCarId) {
+function upsertMarkers() {
+  // remove old
+  const ids = new Set(cars.map(c => c.id));
+  for (const [id, mk] of markersByCarId.entries()) {
     if (!ids.has(id)) {
       cluster.removeLayer(mk);
       markersByCarId.delete(id);
@@ -175,50 +305,99 @@ function upsertMarkers() {
   }
 
   for (const car of cars) {
-    if (!car.pos) continue;
+    if (!car.pos || typeof car.pos.lat !== "number" || typeof car.pos.lng !== "number") continue;
 
+    const isSel = car.id === selectedCarId;
     let marker = markersByCarId.get(car.id);
+
     if (!marker) {
-      marker = L.marker([car.pos.lat, car.pos.lng], { icon: makeCarIcon() });
-      cluster.addLayer(marker);
+      marker = L.marker([car.pos.lat, car.pos.lng], { icon: makeCarIcon(isSel) });
+      marker.bindPopup(buildPopup(car));
+      marker.on("click", () => selectCarById(car.id));
       markersByCarId.set(car.id, marker);
+      cluster.addLayer(marker);
     } else {
       marker.setLatLng([car.pos.lat, car.pos.lng]);
+      marker.setIcon(makeCarIcon(isSel));
+      marker.setPopupContent(buildPopup(car));
     }
   }
-
-  document.getElementById("countCars").textContent = cars.length;
-}
-
-/* ================= LIST ================= */
-function renderCarList() {
-  const el = document.getElementById("carList");
-  el.innerHTML = cars.map(c => `
-    <div class="listCard">
-      <div class="listTop">
-        <p class="listTitle">${c.brand || ""} ${c.model || ""}</p>
-        <span class="badge">${c.urgency === "fast" ? "Ускоренная" : "Стандарт"}</span>
-      </div>
-      <div class="bar"><div style="width:${Math.round((c.progress||0)*100)}%"></div></div>
-    </div>
-  `).join("");
 }
 
 /* ================= DATA ================= */
 async function loadData() {
-  const r = await fetch(WORKER_PUBLIC_URL, { cache:"no-store" });
-  const data = await r.json();
+  const resp = await fetch(WORKER_PUBLIC_URL, { cache:"no-store" });
+  if (!resp.ok) throw new Error("Failed to load data");
+  const data = await resp.json();
 
-  hubs = data.hubs || [];
-  cars = (data.cars || []).filter(c => c.pos);
+  hubs = (data.hubs || []);
+  cars = (data.cars || []).filter(c => c.pos && typeof c.pos.lat === "number");
 
-  upsertMarkers();
+  // если progress пока не приходит — пусть будет 0
+  for (const c of cars) if (typeof c.progress !== "number") c.progress = 0;
+
   renderHubs();
+  upsertMarkers();
   renderCarList();
+
+  // если выбранная машина исчезла — сброс
+  if (selectedCarId && !cars.some(c => c.id === selectedCarId)) {
+    selectedCarId = null;
+    document.getElementById("details").innerHTML = "";
+    renderCarList();
+    upsertMarkers();
+  }
 }
 
-loadData();
-setInterval(loadData, 60000);
+/* ================= SEARCH ================= */
+async function doSearch() {
+  const input = document.getElementById("searchInput");
+  const msg = document.getElementById("searchMsg");
+  const q = String(input.value || "").trim();
+  msg.textContent = "";
+
+  if (q.length < 6) {
+    msg.innerHTML = `<span class="err">Введите минимум 6 символов</span>`;
+    return;
+  }
+
+  try {
+    const r = await fetch(SEARCH_URL + encodeURIComponent(q), { cache:"no-store" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Не найдено");
+
+    const found = data.car;
+    // Если авто не было в общем списке (например скрыто), добавим временно в массив
+    const idx = cars.findIndex(c => c.id === found.id);
+    if (idx === -1) cars.unshift(found);
+    else cars[idx] = found;
+
+    msg.innerHTML = `<span class="ok">Найдено</span>`;
+    renderHubs();
+    upsertMarkers();
+    renderCarList();
+    selectCarById(found.id);
+  } catch (e) {
+    msg.innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+document.getElementById("searchBtn").addEventListener("click", doSearch);
+document.getElementById("searchInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doSearch();
+});
+
+/* ================= START ================= */
+(async function start(){
+  try {
+    await loadData();
+  } catch(e) {
+    console.error(e);
+    alert("Не удалось загрузить данные. Проверьте /api/public.");
+    return;
+  }
+  setInterval(() => loadData().catch(console.error), REFRESH_DATA_MS);
+})();
 </script>
 </body>
 </html>
