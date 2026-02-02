@@ -19,35 +19,46 @@
     .wrap { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
     #map { height: 100vh; }
     .side { border-left: 1px solid #eee; padding: 12px; overflow: auto; background:#fff; }
+
     .title { font-size: 16px; font-weight: 700; margin: 0 0 8px; }
     .sub { font-size: 12px; color: #666; margin: 0 0 12px; }
-    .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
-    .row { display: flex; gap: 10px; }
-    .img { width: 88px; height: 66px; border-radius: 10px; background: #f3f3f3; object-fit: cover; }
-    .meta { flex: 1; }
-    .big { font-weight: 700; margin: 0; }
-    .small { font-size: 12px; color: #666; margin: 4px 0 0; }
-    .pill { display:inline-block; font-size: 12px; padding: 4px 8px; border-radius: 999px; background:#f6f6f6; margin-top:8px;}
-    .muted { color:#777; }
-    .hint { font-size: 12px; color: #777; margin-top: 8px; }
 
-    /* List cards */
+    .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; margin-bottom: 10px; }
+
     .listCard { border:1px solid #eee; border-radius:12px; padding:10px; margin-bottom:10px; cursor:pointer; }
     .listCard:hover { background:#fafafa; }
-    .listTop { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .listTop { display:flex; justify-content:space-between; gap:8px; }
     .listTitle { font-weight:700; font-size:13px; margin:0; }
-    .badge { font-size:11px; padding:3px 8px; border-radius:999px; background:#f6f6f6; white-space:nowrap; }
-    .bar { height:6px; background:#eee; border-radius:999px; overflow:hidden; margin-top:8px; }
-    .bar > div { height:100%; width:0%; background:#111; border-radius:999px; }
-    .listMeta { font-size:12px; color:#666; margin-top:6px; display:flex; justify-content:space-between; gap:10px; }
-    .divider { border:none; border-top:1px dashed #eee; margin:12px 0; }
+    .badge { font-size:11px; padding:3px 8px; border-radius:999px; background:#f6f6f6; }
+    .bar { height:6px; background:#eee; border-radius:999px; overflow:hidden; margin-top:6px; }
+    .bar > div { height:100%; background:#111; }
 
-    /* Car icon */
+    /* Icons */
     .carIcon {
       font-size: 18px;
       transform: translate(-6px, -10px);
       filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
-      user-select: none;
+      user-select:none;
+    }
+
+    .hubIcon {
+      font-size: 18px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background:#e0e0e0;
+      border:2px solid #555;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
+      user-select:none;
+    }
+
+    .hubIcon.active {
+      background:#333;
+      border-color:#000;
+      color:#fff;
     }
 
     @media (max-width: 900px) {
@@ -58,40 +69,28 @@
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div id="map"></div>
+<div class="wrap">
+  <div id="map"></div>
 
-    <div class="side">
-      <p class="title">Поставки автомобилей</p>
-      <p class="sub">Позиции и статусы рассчитываются автоматически и отображаются ориентировочно.</p>
+  <div class="side">
+    <p class="title">Поставки автомобилей</p>
+    <p class="sub">Позиции и статусы обновляются автоматически</p>
 
-      <div class="card" id="summaryCard">
-        <div><b id="countCars">—</b> авто на карте</div>
-        <div class="hint">Нажмите на авто в списке или на карте.</div>
-      </div>
-
-      <div id="carList"></div>
-      <hr class="divider" />
-      <div id="details"></div>
+    <div class="card">
+      <div><b id="countCars">—</b> авто на карте</div>
     </div>
+
+    <div id="carList"></div>
   </div>
+</div>
 
 <script>
-/** =========================
- * CONFIG
- * ========================= */
+/* ================= CONFIG ================= */
 const WORKER_PUBLIC_URL = "/api/public";
-const REFRESH_DATA_MS = 60_000;
-const TICK_MS = 10_000;
+const ACTIVE_HUB_RADIUS_KM = 10;
 
-/** =========================
- * MAP SETUP
- * ========================= */
-const map = L.map('map', { preferCanvas: true }).setView([50.5, 127.5], 4);
-
-/**
- * CARTO Positron (нейтральные тайлы, без спорных атрибутов/флагов)
- */
+/* ================= MAP ================= */
+const map = L.map('map').setView([50.5, 127.5], 4);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 19,
   attribution: ''
@@ -99,227 +98,128 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 
 const cluster = L.markerClusterGroup();
 map.addLayer(cluster);
+const hubLayer = L.layerGroup().addTo(map);
 
 let cars = [];
 let hubs = [];
 let markersByCarId = new Map();
 
-/** =========================
- * UTILS
- * ========================= */
-function escapeHtml(str) {
-  return String(str || "").replace(/[&<>"']/g, (m) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-  }[m]));
+/* ================= UTILS ================= */
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = x => x * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const s = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-function fmtDate(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("ru-RU");
+function hubEmoji(type) {
+  if (type === "border") return "🚧";
+  if (type === "office") return "🏢";
+  return "🏭";
 }
 
-function fmtEta(isoArrive) {
-  if (!isoArrive) return "—";
-  const t = Date.parse(isoArrive);
-  if (!t) return "—";
-  const diff = t - Date.now();
-  if (diff <= 0) return "сейчас";
-  const hours = diff / 3600000;
-  if (hours < 24) return `${Math.round(hours)} ч`;
-  const days = hours / 24;
-  if (days < 14) return `${days.toFixed(1)} дн`;
-  return `${Math.round(days)} дн`;
-}
-
-function urgencyText(u) {
-  return u === "fast" ? "Ускоренная" : "Стандарт";
-}
-
-/** =========================
- * Icons
- * ========================= */
-function makeCarIcon(car) {
-  const html = `<div class="carIcon">🚗</div>`;
+/* ================= ICONS ================= */
+function makeCarIcon() {
   return L.divIcon({
-    html,
+    html: `<div class="carIcon">🚗</div>`,
     className: "",
-    iconSize: [18, 18],
-    iconAnchor: [9, 9]
+    iconSize: [18,18],
+    iconAnchor: [9,9]
   });
 }
 
-/** =========================
- * UI: details
- * ========================= */
-function showCarDetails(car) {
-  const el = document.getElementById("details");
-  el.innerHTML = "";
+function makeHubIcon(hub, active) {
+  const emoji = hubEmoji(hub.type);
+  const cls = active ? "hubIcon active" : "hubIcon";
+  return L.divIcon({
+    html: `<div class="${cls}">${emoji}</div>`,
+    className: "",
+    iconSize: [28,28],
+    iconAnchor: [14,14]
+  });
+}
 
-  const card = document.createElement("div");
-  card.className = "card";
+/* ================= RENDER HUBS ================= */
+function renderHubs() {
+  hubLayer.clearLayers();
 
-  const imgHtml = car.photo_url ? `<img class="img" src="${car.photo_url}" alt="auto" />` : `<div class="img"></div>`;
-  const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
+  for (const h of hubs) {
+    if (!h.lat || !h.lng) continue;
 
-  const pct = Math.round(((car.progress ?? 0) * 100));
-  const eta = fmtEta(car.arrive_time);
+    const isActive = cars.some(c =>
+      c.pos &&
+      haversineKm(c.pos, { lat:h.lat, lng:h.lng }) < ACTIVE_HUB_RADIUS_KM
+    );
 
-  card.innerHTML = `
-    <div class="row">
-      ${imgHtml}
-      <div class="meta">
-        <p class="big">${escapeHtml(title)}</p>
-        <p class="small"><span class="muted">Срочность:</span> ${escapeHtml(urgencyText(car.urgency))}</p>
-        <div class="pill">${escapeHtml(car.status || "—")}</div>
+    const mk = L.marker([h.lat, h.lng], {
+      icon: makeHubIcon(h, isActive)
+    }).bindTooltip(h.name_ru || "Хаб", { direction:"top", offset:[0,-10] });
 
-        <div class="bar" style="margin-top:10px"><div style="width:${pct}%"></div></div>
-        <p class="small"><span class="muted">Прогресс:</span> ${pct}%</p>
-
-        <p class="small"><span class="muted">Ориентировочное прибытие:</span> ${escapeHtml(fmtDate(car.arrive_time))}</p>
-        <p class="small"><span class="muted">Осталось:</span> ${escapeHtml(eta)}</p>
-      </div>
-    </div>
-
-    <div class="hint">Позиция обновляется автоматически.</div>
-  `;
-  el.appendChild(card);
-
-  // фокус к машине
-  if (car.pos && typeof car.pos.lat === "number" && typeof car.pos.lng === "number") {
-    map.setView([car.pos.lat, car.pos.lng], Math.max(map.getZoom(), 6), { animate: true });
+    hubLayer.addLayer(mk);
   }
 }
 
-/** =========================
- * List
- * ========================= */
-function renderCarList() {
-  const el = document.getElementById("carList");
-  if (!el) return;
-
-  // сортировка: ближе к завершению выше
-  const list = [...cars].sort((a,b) => (b.progress ?? 0) - (a.progress ?? 0));
-
-  el.innerHTML = list.map(car => {
-    const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
-    const pct = Math.round((car.progress ?? 0) * 100);
-    const eta = fmtEta(car.arrive_time);
-    const badge = urgencyText(car.urgency);
-
-    return `
-      <div class="listCard" data-id="${car.id}">
-        <div class="listTop">
-          <p class="listTitle">${escapeHtml(title)}</p>
-          <span class="badge">${escapeHtml(badge)}</span>
-        </div>
-
-        <div class="bar"><div style="width:${pct}%"></div></div>
-
-        <div class="listMeta">
-          <span>${escapeHtml(car.status || "—")}</span>
-          <span>ETA: ${escapeHtml(eta)}</span>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  for (const node of el.querySelectorAll(".listCard")) {
-    node.addEventListener("click", () => {
-      const id = node.getAttribute("data-id");
-      const car = cars.find(x => x.id === id);
-      if (!car) return;
-      showCarDetails(car);
-
-      // открыть popup на карте (если есть маркер)
-      const mk = markersByCarId.get(id);
-      if (mk) mk.openPopup();
-    });
-  }
-}
-
-/** =========================
- * MARKERS
- * ========================= */
-function buildPopup(car) {
-  const title = `${car.brand || ""} ${car.model || ""}`.trim() || "Автомобиль";
-  return `
-    <b>${escapeHtml(title)}</b><br/>
-    <span style="font-size:12px;color:#666">Статус: ${escapeHtml(car.status || "—")}</span>
-  `;
-}
-
+/* ================= MARKERS ================= */
 function upsertMarkers() {
-  // remove old markers not present
-  const carIds = new Set(cars.map(c => c.id));
-  for (const [id, mk] of markersByCarId.entries()) {
-    if (!carIds.has(id)) {
+  const ids = new Set(cars.map(c => c.id));
+
+  for (const [id, mk] of markersByCarId) {
+    if (!ids.has(id)) {
       cluster.removeLayer(mk);
       markersByCarId.delete(id);
     }
   }
 
   for (const car of cars) {
-    if (!car.pos || typeof car.pos.lat !== "number" || typeof car.pos.lng !== "number") continue;
+    if (!car.pos) continue;
 
     let marker = markersByCarId.get(car.id);
     if (!marker) {
-      marker = L.marker([car.pos.lat, car.pos.lng], { icon: makeCarIcon(car) });
-      marker.on("click", () => showCarDetails(car));
-      marker.bindPopup(buildPopup(car));
-      markersByCarId.set(car.id, marker);
+      marker = L.marker([car.pos.lat, car.pos.lng], { icon: makeCarIcon() });
       cluster.addLayer(marker);
+      markersByCarId.set(car.id, marker);
     } else {
       marker.setLatLng([car.pos.lat, car.pos.lng]);
-      marker.setPopupContent(buildPopup(car));
-      // если срочность поменяется — обновим иконку
-      marker.setIcon(makeCarIcon(car));
     }
   }
 
-  document.getElementById("countCars").textContent = String(cars.length);
+  document.getElementById("countCars").textContent = cars.length;
 }
 
-/** =========================
- * DATA LOAD
- * ========================= */
+/* ================= LIST ================= */
+function renderCarList() {
+  const el = document.getElementById("carList");
+  el.innerHTML = cars.map(c => `
+    <div class="listCard">
+      <div class="listTop">
+        <p class="listTitle">${c.brand || ""} ${c.model || ""}</p>
+        <span class="badge">${c.urgency === "fast" ? "Ускоренная" : "Стандарт"}</span>
+      </div>
+      <div class="bar"><div style="width:${Math.round((c.progress||0)*100)}%"></div></div>
+    </div>
+  `).join("");
+}
+
+/* ================= DATA ================= */
 async function loadData() {
-  const resp = await fetch(WORKER_PUBLIC_URL, { cache: "no-store" });
-  if (!resp.ok) throw new Error("Failed to load data");
-  const data = await resp.json();
+  const r = await fetch(WORKER_PUBLIC_URL, { cache:"no-store" });
+  const data = await r.json();
 
-  hubs = (data.hubs || []);
-  cars = (data.cars || []).filter(c =>
-    c.pos && typeof c.pos.lat === "number" && typeof c.pos.lng === "number"
-  );
-
-  // если progress не приходит (пока не сделали патч API), пусть будет 0
-  for (const c of cars) {
-    if (typeof c.progress !== "number") c.progress = 0;
-  }
+  hubs = data.hubs || [];
+  cars = (data.cars || []).filter(c => c.pos);
 
   upsertMarkers();
+  renderHubs();
   renderCarList();
 }
 
-async function start() {
-  try {
-    await loadData();
-  } catch (e) {
-    console.error(e);
-    alert("Не удалось загрузить данные. Проверьте /api/public.");
-    return;
-  }
-
-  setInterval(() => loadData().catch(console.error), REFRESH_DATA_MS);
-  setInterval(() => {
-    // без пересчёта — просто переотрисуем, если данные уже обновились
-    upsertMarkers();
-  }, TICK_MS);
-}
-
-start();
+loadData();
+setInterval(loadData, 60000);
 </script>
 </body>
 </html>
+
