@@ -107,7 +107,7 @@ export default async function handler(req, res) {
 
   const { data: hubs } = await db
     .from("hubs")
-    .select("id,name_ru,lat,lng,dwell_days");
+    .select("id,name_ru,lat,lng,dwell_days,type");
 
   const hubMap = Object.fromEntries(hubs.map((h) => [h.id, h]));
 
