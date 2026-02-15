@@ -215,10 +215,49 @@ function makeCarIcon(isSelected) {
 }
 
 function makeHubIcon(hub, active) {
+
+  let size = 26;
+  let bgColor = "#6c757d"; // по умолчанию логистический узел
+
+  if (hub.type === "service") {
+    size = 20;
+    bgColor = "#28a745"; // зелёный
+  }
+
+  if (hub.type === "border") {
+    size = 24;
+    bgColor = "#f4c542"; // жёлтый
+  }
+
+  if (hub.type === "office") {
+    size = 22;
+    bgColor = "#007bff"; // синий
+  }
+
   const emoji = hubEmoji(hub.type);
-  const cls = active ? "hubIcon active" : "hubIcon";
-  const html = `<div class="${cls}"><span class="hubEmoji">${emoji}</span></div>`;
-  return L.divIcon({ html, className:"", iconSize:[17,17], iconAnchor:[8,8] });
+
+  const html = `
+    <div style="
+      width:${size}px;
+      height:${size}px;
+      border-radius:50%;
+      background:${bgColor};
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:${size * 0.5}px;
+      box-shadow:0 2px 6px rgba(0,0,0,0.25);
+    ">
+      ${emoji}
+    </div>
+  `;
+
+  return L.divIcon({
+    html,
+    className:"",
+    iconSize:[size,size],
+    iconAnchor:[size/2,size/2]
+  });
 }
 
 /* ================= UI ================= */
