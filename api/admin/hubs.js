@@ -16,7 +16,7 @@ function checkAdmin(req, res) {
 }
 
 function normalizeType(t) {
-  if (t === "border" || t === "office" || t === "hub") return t;
+  if (t === "border" || t === "office" || t === "hub" || t === "service") return t;
   return "hub";
 }
 
