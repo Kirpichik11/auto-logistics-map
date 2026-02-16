@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- MarkerCluster (2 CSS + 1 JS) -->
+  <!-- MarkerCluster -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -42,7 +42,7 @@
     .bar > div { height:100%; background:#111; border-radius:999px; }
     .listMeta { font-size:12px; color:#666; margin-top:6px; display:flex; justify-content:space-between; gap:10px; }
 
-    /* Машина: БЕЗ круга, просто эмодзи */
+    /* Машина: эмодзи */
     .carEmoji {
       font-size: 24px;
       line-height: 1;
@@ -84,7 +84,7 @@
     <!-- SUMMARY -->
     <div class="card">
       <div><b id="countCars">—</b> авто на карте</div>
-      <div class="hint">Нажмите на авто в списке или на карте, чтобы увидеть детали.</div>
+      <div class="hint">Нажмите на авто в списке или на карте, чтобы увидеть детали и маршрут.</div>
       <div class="hint">Клик по пустой карте — сброс выбора и скрытие маршрута.</div>
     </div>
 
@@ -100,6 +100,15 @@ const SEARCH_URL = "/api/search?q=";
 const REFRESH_DATA_MS = 60_000;
 const ACTIVE_HUB_RADIUS_KM = 10;
 
+/* ================= SAFETY: Leaflet loaded? ================= */
+if (typeof window.L === "undefined") {
+  document.querySelector(".side")?.insertAdjacentHTML(
+    "afterbegin",
+    '<div class="card"><b class="err">Ошибка: Leaflet не загрузился</b><div class="hint">Проверьте доступность unpkg.com или блокировщик/провайдера.</div></div>'
+  );
+  throw new Error("Leaflet (L) is undefined");
+}
+
 /* ================= MAP ================= */
 const map = L.map('map', { preferCanvas:true, attributionControl: false }).setView([50.5, 127.5], 4);
 
@@ -113,7 +122,7 @@ L.control.attribution({ position: "bottomright", prefix: false })
 
 /**
  * Pane'ы (важен порядок):
- * - hubPane: обычные хабы (их линия МОЖЕТ перекрыть)
+ * - hubPane: обычные хабы (линия может их перекрывать)
  * - routePane: линия маршрута
  * - routeHubPane: контрольные точки маршрута (всегда поверх линии)
  * - carPane: авто поверх всего
@@ -130,15 +139,16 @@ map.getPane("routeHubPane").style.zIndex = 410;
 map.createPane("carPane");
 map.getPane("carPane").style.zIndex = 450;
 
-// кластеризация машин
-const cluster = L.markerClusterGroup();
-map.addLayer(cluster);
+/* MarkerCluster fallback:
+   если plugin не загрузился — не падаем, а работаем без кластеров */
+const useCluster = typeof L.markerClusterGroup === "function";
+const carLayer = useCluster ? L.markerClusterGroup() : L.layerGroup();
+map.addLayer(carLayer);
 
 // слой хабов (обычные)
-const hubLayer = L.layerGroup([], { pane: "hubPane" }).addTo(map);
-
-// слой контрольных хабов маршрута (поверх линии)
-const routeHubLayer = L.layerGroup([], { pane: "routeHubPane" }).addTo(map);
+const hubLayer = L.layerGroup().addTo(map);
+// слой контрольных хабов выбранного маршрута
+const routeHubLayer = L.layerGroup().addTo(map);
 
 // линия маршрута
 let routePolyline = null;
@@ -190,11 +200,7 @@ function hubEmoji(type) {
   if (type === "border") return "🚧";
   if (type === "office") return "🏢";
   if (type === "service") return "🏪";
-  return "🏭"; // hub
-}
-function clamp01(x) { return Math.max(0, Math.min(1, x)); }
-function lerpLatLng(a, b, t) {
-  return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+  return "🏭";
 }
 
 /* ================= ICONS ================= */
@@ -207,23 +213,12 @@ function makeCarIcon(isSelected) {
 function makeHubIcon(hub, active) {
   let size = 26;
   let bgColor = "#6c757d"; // hub
+  if (hub.type === "service") { size = 20; bgColor = "#28a745"; }
+  if (hub.type === "border")  { size = 24; bgColor = "#f4c542"; }
+  if (hub.type === "office")  { size = 22; bgColor = "#007bff"; }
 
-  if (hub.type === "service") {
-    size = 20;
-    bgColor = "#28a745"; // зелёный
-  }
-  if (hub.type === "border") {
-    size = 24;
-    bgColor = "#f4c542"; // жёлтый
-  }
-  if (hub.type === "office") {
-    size = 22;
-    bgColor = "#007bff"; // синий
-  }
-
-  // active подсветка (лёгкая)
-  const ring = active ? "0 0 0 3px rgba(0,0,0,0.25) inset" : "none";
   const emoji = hubEmoji(hub.type);
+  const outline = active ? "outline:2px solid rgba(0,0,0,0.45);" : "";
 
   const html = `
     <div style="
@@ -234,9 +229,9 @@ function makeHubIcon(hub, active) {
       display:flex;
       align-items:center;
       justify-content:center;
-      font-size:${size * 0.5}px;
+      font-size:${Math.round(size * 0.5)}px;
       box-shadow:0 2px 6px rgba(0,0,0,0.25);
-      ${active ? `outline:2px solid rgba(0,0,0,0.45); outline-offset:0;` : ``}
+      ${outline}
     ">
       ${emoji}
     </div>
@@ -248,6 +243,13 @@ function makeHubIcon(hub, active) {
     iconSize:[size,size],
     iconAnchor:[size/2,size/2]
   });
+}
+
+/* ================= ACTIVE HUB ================= */
+function isHubActive(h) {
+  return cars.some(c =>
+    c.pos && haversineKm(c.pos, { lat:h.lat, lng:h.lng }) < ACTIVE_HUB_RADIUS_KM
+  );
 }
 
 /* ================= ROUTE (LINE + CONTROL POINTS) ================= */
@@ -271,12 +273,6 @@ function buildRouteLatLngs(car) {
   return latlngs;
 }
 
-function isHubActive(h) {
-  return cars.some(c =>
-    c.pos && haversineKm(c.pos, { lat:h.lat, lng:h.lng }) < ACTIVE_HUB_RADIUS_KM
-  );
-}
-
 function showRouteForCar(car) {
   clearRoute();
 
@@ -296,7 +292,7 @@ function showRouteForCar(car) {
     }).addTo(map);
   }
 
-  // контрольные хабы маршрута (поверх линии)
+  // контрольные точки маршрута (всегда поверх линии)
   for (const id of routeSet) {
     const h = hubsById.get(id);
     if (!h) continue;
@@ -335,7 +331,6 @@ function showCarDetails(car) {
       </div>
       <div class="bar" style="margin-top:10px"><div style="width:${pct}%"></div></div>
       <div class="small" style="margin-top:6px">Прогресс: ${pct}%</div>
-      <div class="hint" style="margin-top:8px">Маршрут показывается только для выбранного авто.</div>
     </div>
   `;
 }
@@ -346,7 +341,6 @@ function selectCarById(id) {
   renderCarList();
   upsertMarkers();
 
-  // если сняли выбор — скрыть маршрут и детали
   if (!selectedCarId) {
     clearRoute();
     document.getElementById("details").innerHTML = "";
@@ -364,12 +358,11 @@ function selectCarById(id) {
 
   showCarDetails(car);
 
-  // показать маршрут ТОЛЬКО для выбранного авто
   const routeSet = showRouteForCar(car);
   renderHubs(routeSet);
 }
 
-/* Клик по пустой карте — сброс выбора */
+/* Клик по пустой карте — сброс */
 map.on("click", () => {
   if (selectedCarId) selectCarById(null);
 });
@@ -422,8 +415,7 @@ function renderHubs(routeSet) {
   for (const h of hubs) {
     if (typeof h.lat !== "number" || typeof h.lng !== "number") continue;
 
-    // если хаб входит в маршрут выбранного авто — НЕ рисуем его тут
-    // он будет в routeHubLayer поверх линии
+    // точки маршрута рисуются отдельно, поверх линии
     if (routeSet && routeSet.has(h.id)) continue;
 
     const mk = L.marker([h.lat, h.lng], {
@@ -451,7 +443,7 @@ function upsertMarkers() {
   const ids = new Set(cars.map(c => c.id));
   for (const [id, mk] of markersByCarId.entries()) {
     if (!ids.has(id)) {
-      cluster.removeLayer(mk);
+      carLayer.removeLayer(mk);
       markersByCarId.delete(id);
     }
   }
@@ -470,7 +462,7 @@ function upsertMarkers() {
       marker.bindPopup(buildPopup(car));
       marker.on("click", () => selectCarById(car.id));
       markersByCarId.set(car.id, marker);
-      cluster.addLayer(marker);
+      carLayer.addLayer(marker);
     } else {
       marker.setLatLng([car.pos.lat, car.pos.lng]);
       marker.setIcon(makeCarIcon(isSel));
@@ -488,6 +480,88 @@ async function loadData() {
   hubsById = new Map(hubs.map(h => [h.id, h]));
 
   cars = (data.cars || []).filter(c => c.pos && typeof c.pos.lat === "number");
+
+  // базовый рендер без маршрута
+  renderHubs(null);
+  upsertMarkers();
+  renderCarList();
+
+  // если выбранная машина исчезла — сброс
+  if (selectedCarId && !cars.some(c => c.id === selectedCarId)) {
+    selectedCarId = null;
+    clearRoute();
+    document.getElementById("details").innerHTML = "";
+    renderCarList();
+    upsertMarkers();
+    renderHubs(null);
+    return;
+  }
+
+  // если машина выбрана — восстановить маршрут
+  if (selectedCarId) {
+    const car = cars.find(c => c.id === selectedCarId);
+    if (car) {
+      const routeSet = showRouteForCar(car);
+      renderHubs(routeSet);
+    }
+  }
+}
+
+/* ================= SEARCH ================= */
+async function doSearch() {
+  const input = document.getElementById("searchInput");
+  const msg = document.getElementById("searchMsg");
+  const q = String(input.value || "").trim();
+  msg.textContent = "";
+
+  if (q.length < 6) {
+    msg.innerHTML = `<span class="err">Введите минимум 6 символов</span>`;
+    return;
+  }
+
+  try {
+    const r = await fetch(SEARCH_URL + encodeURIComponent(q) + `&t=${Date.now()}`, { cache:"no-store" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Не найдено");
+
+    const found = data.car;
+
+    const idx = cars.findIndex(c => c.id === found.id);
+    if (idx === -1) cars.unshift(found);
+    else cars[idx] = found;
+
+    msg.innerHTML = `<span class="ok">Найдено</span>`;
+
+    renderHubs(null);
+    upsertMarkers();
+    renderCarList();
+
+    selectCarById(found.id);
+  } catch (e) {
+    msg.innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`;
+  }
+}
+
+document.getElementById("searchBtn").addEventListener("click", doSearch);
+document.getElementById("searchInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doSearch();
+});
+
+/* ================= START ================= */
+(async function start(){
+  try {
+    await loadData();
+  } catch(e) {
+    console.error(e);
+    alert("Не удалось загрузить данные. Проверьте /api/public и консоль.");
+    return;
+  }
+  setInterval(() => loadData().catch(console.error), REFRESH_DATA_MS);
+})();
+</script>
+</body>
+</html>
+
 
   // базовый рендер (без маршрута)
   /
