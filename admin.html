@@ -562,14 +562,57 @@ function autoBuildRoute(){
 
   const cnBorder = pair.cnHub;
   const ruBorder = pair.ruHub;
+  // ===============================
+// ВАЖНО: учитывать режим пары (land или sea)
+// ===============================
 
-  // CN: минимум 3 промежуточных
-  const cnMids = pickIntermediateHubs("CN", startCN, cnBorder, 3, 5);
+// если это сухопутная пара — используем коридор
+// если морская — коридор НЕ используем
+const cnWaypoints =
+  (pair.mode === "land" && Array.isArray(pair.cnWaypoints))
+    ? pair.cnWaypoints
+    : [];
+
+// получаем реальные hubs по code
+const cnForcedHubs = cnWaypoints
+  .map(code => getHubByCode(code))
+  .filter(Boolean);
+
+// строим цепочку CN: старт → коридор → граница
+const cnChain = [startCN, ...cnForcedHubs, cnBorder];
+
+
+let cnMids = [];
+
+for (let i = 0; i < cnChain.length - 1; i++) {
+  const a = cnChain[i];
+  const b = cnChain[i+1];
+
+  const mids = pickIntermediateHubs("CN", a, b, 0, 3);
+  cnMids.push(...mids);
+}
   // RU: максимум 3 промежуточных
   const ruMids = pickIntermediateHubs("RU", ruBorder, endRU, 0, 3);
 
   // Маршрут: startCN -> cnMids -> cnBorder -> ruBorder -> ruMids -> endRU
-  const ids = [];
+  const ids = [
+    startCN.id,
+
+  // промежуточные CN
+    ...cnMids.map(h => h.id),
+
+  // граница CN
+    cnBorder.id,
+
+  // граница RU
+    ruBorder.id,
+
+  // промежуточные RU
+    ...ruMids.map(h => h.id),
+
+  // конечная
+    endRU.id
+  ];
   ids.push(startCN.id);
   for (const h of cnMids) ids.push(h.id);
   ids.push(cnBorder.id);
