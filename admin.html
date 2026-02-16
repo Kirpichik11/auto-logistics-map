@@ -41,6 +41,14 @@
       user-select:none;
     }
     .hubIcon.active { background:#333; border-color:#000; color:#fff; }
+
+    /* Route editor rows */
+    .routeRow{
+      display:flex; gap:8px; align-items:center;
+      padding:8px 10px; border:1px solid rgba(0,0,0,0.1);
+      border-radius:10px; margin:6px 0;
+    }
+    .routeRowTitle{ flex:1; font-size:12px; }
   </style>
 </head>
 <body>
@@ -112,7 +120,7 @@
     <!-- CARS -->
     <div id="panelCars" class="card" style="display:none">
       <b>Автомобили</b>
-      <div class="small">Создание + редактирование. Клик по машине на карте — откроет её карточку.</div>
+      <div class="small">Создание + редактирование. Маршрут можно собрать автоматически и затем вручную править.</div>
 
       <input id="carId" type="hidden" />
 
@@ -140,11 +148,36 @@
       <label>Старт процесса (дата/время)</label>
       <input id="carStartTime" type="datetime-local" />
 
-      <label>Маршрут (выберите точки по порядку)</label>
-      <select id="carStartHub"></select>
-      <select id="carMid1Hub"></select>
-      <select id="carMid2Hub"></select>
-      <select id="carBorderHub"></select>
+      <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
+
+      <b>Автосборка маршрута</b>
+      <div class="small">Выберите старт (CN), конечную точку (RU) и пару границы. Затем можно вручную править маршрут ниже.</div>
+
+      <label>Стартовая точка (Китай)</label>
+      <select id="carStartCN"></select>
+
+      <label>Конечная точка (Россия)</label>
+      <select id="carEndRU"></select>
+
+      <label>Пара границы (CN → RU)</label>
+      <select id="carBorderPair"></select>
+
+      <div class="row" style="margin-top:8px">
+        <button type="button" onclick="autoBuildRoute()">Собрать маршрут автоматически</button>
+        <button type="button" onclick="clearRouteEditor()">Очистить маршрут</button>
+      </div>
+
+      <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
+
+      <b>Маршрут (ручная правка)</b>
+      <div class="small">Добавляйте/удаляйте/двигайте точки — это сохранится в route_hub_ids.</div>
+
+      <div class="row" style="margin-top:8px">
+        <select id="routeAddHubSelect"></select>
+        <button type="button" id="routeAddBtn">Добавить точку</button>
+      </div>
+
+      <div id="routeList" style="margin-top:10px"></div>
 
       <label>Показ на публичной карте</label>
       <select id="carPublic">
@@ -192,6 +225,30 @@ let hubMarkersById = new Map();
 let carMarkersById = new Map();
 
 const ACTIVE_HUB_RADIUS_KM = 10;
+
+// ==== Route editor state ====
+let allHubs = [];
+let editingRouteHubIds = []; // финальный route_hub_ids, который сохраняем
+let hubsById = new Map();
+
+function hubTypeLabel(t){
+  if (t === "border") return "Граница";
+  if (t === "office") return "Офис";
+  if (t === "service") return "Сервис/Выдача";
+  return "Хаб";
+}
+
+/**
+ * ==== BORDER PAIRS CONFIG ====
+ * Тут менеджер/ты прописываете пары границы по CODE (из hubs.code).
+ * Важно: в паре должны существовать 2 хаба в таблице hubs: один CN, один RU.
+ */
+const BORDER_PAIRS = [
+  // Пример. ЗАМЕНИ на реальные codes из твоей базы:
+  { id:"heihe-blag", name:"Хэйхэ → Благовещенск", cnCode:"HEIHE", ruCode:"BLAG" },
+  { id:"suifenhe-uss", name:"Суйфэньхэ → Уссурийск", cnCode:"SUIFENHE", ruCode:"USSURIISK" },
+  { id:"shanghai-vlad", name:"Шанхай → Владивосток", cnCode:"SHANGHAI", ruCode:"VLADIVOSTOK" },
+];
 
 /* ================= UTILS ================= */
 function saveKey(){
@@ -244,6 +301,7 @@ function haversineKm(a, b) {
 function hubEmoji(type) {
   if (type === "border") return "🚧";
   if (type === "office") return "🏢";
+  if (type === "service") return "🏪";
   return "🏭";
 }
 
@@ -280,6 +338,234 @@ function isoToLocalDatetime(iso) {
   if (Number.isNaN(d.getTime())) return "";
   const pad = (n)=>String(n).padStart(2,"0");
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* ================= ROUTE EDITOR UI ================= */
+function hubLabel(h){
+  const name = h.name_ru || h.code || h.id;
+  return `${name} • ${hubTypeLabel(h.type)} • ${h.country}`;
+}
+
+function fillRouteAddSelect(){
+  const sel = document.getElementById("routeAddHubSelect");
+  sel.innerHTML = "";
+  for (const h of allHubs) sel.appendChild(option(h.id, hubLabel(h)));
+}
+
+function renderRouteList(){
+  const wrap = document.getElementById("routeList");
+  wrap.innerHTML = "";
+
+  if (!editingRouteHubIds.length) {
+    wrap.innerHTML = `<div class="small muted">Маршрут пуст. Нажмите "Собрать маршрут автоматически" или добавьте точки вручную.</div>`;
+    return;
+  }
+
+  editingRouteHubIds.forEach((hubId, idx) => {
+    const h = hubsById.get(hubId);
+
+    const row = document.createElement("div");
+    row.className = "routeRow";
+
+    const title = document.createElement("div");
+    title.className = "routeRowTitle";
+    title.textContent = `${idx+1}. ${h ? hubLabel(h) : hubId}`;
+
+    const up = document.createElement("button");
+    up.type = "button";
+    up.textContent = "↑";
+    up.disabled = idx === 0;
+    up.onclick = () => {
+      const t = editingRouteHubIds[idx-1];
+      editingRouteHubIds[idx-1] = editingRouteHubIds[idx];
+      editingRouteHubIds[idx] = t;
+      renderRouteList();
+    };
+
+    const down = document.createElement("button");
+    down.type = "button";
+    down.textContent = "↓";
+    down.disabled = idx === editingRouteHubIds.length-1;
+    down.onclick = () => {
+      const t = editingRouteHubIds[idx+1];
+      editingRouteHubIds[idx+1] = editingRouteHubIds[idx];
+      editingRouteHubIds[idx] = t;
+      renderRouteList();
+    };
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Удалить";
+    del.onclick = () => {
+      editingRouteHubIds.splice(idx, 1);
+      renderRouteList();
+    };
+
+    row.appendChild(title);
+    row.appendChild(up);
+    row.appendChild(down);
+    row.appendChild(del);
+    wrap.appendChild(row);
+  });
+}
+
+function clearRouteEditor(){
+  editingRouteHubIds = [];
+  renderRouteList();
+}
+
+document.getElementById("routeAddBtn").addEventListener("click", () => {
+  const id = document.getElementById("routeAddHubSelect").value;
+  if (!id) return;
+  editingRouteHubIds.push(id);
+  renderRouteList();
+});
+
+/* ================= AUTO ROUTE BUILD ================= */
+/**
+ * Алгоритм (эвристика, без графа дорог):
+ * 1) Выбираем пару границы, которая минимизирует:
+ *    dist(startCN -> borderCN) + dist(borderRU -> endRU)
+ *    (если менеджер выбрал пару вручную — используем её)
+ * 2) CN участок: startCN -> ... -> borderCN
+ *    - промежуточных точек минимум 3 (если есть кандидаты)
+ *    - выбираем хабы CN, которые близко к прямой линии (коридор),
+ *      иначе берем ближайшие к линии.
+ * 3) RU участок: borderRU -> ... -> endRU
+ *    - максимум 3 промежуточные точки.
+ */
+function pointToSegmentDistKm(p, a, b){
+  // приближенно: проекция в "плоских" координатах (для подбора хабов достаточно)
+  const ax = a.lng, ay = a.lat;
+  const bx = b.lng, by = b.lat;
+  const px = p.lng, py = p.lat;
+
+  const abx = bx-ax, aby = by-ay;
+  const apx = px-ax, apy = py-ay;
+  const ab2 = abx*abx + aby*aby || 1e-9;
+  let t = (apx*abx + apy*aby) / ab2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + abx*t;
+  const cy = ay + aby*t;
+
+  return haversineKm({lat:py, lng:px}, {lat:cy, lng:cx});
+}
+
+function chooseBorderPair(startCN, endRU, forcedPairId){
+  if (!BORDER_PAIRS.length) return null;
+
+  const byCode = new Map(allHubs.map(h => [h.code, h]));
+  const pairsResolved = BORDER_PAIRS.map(p => ({
+    ...p,
+    cnHub: byCode.get(p.cnCode) || null,
+    ruHub: byCode.get(p.ruCode) || null
+  })).filter(p => p.cnHub && p.ruHub);
+
+  if (!pairsResolved.length) return null;
+
+  if (forcedPairId) {
+    const forced = pairsResolved.find(p => p.id === forcedPairId);
+    if (forced) return forced;
+  }
+
+  let best = null;
+  let bestScore = Infinity;
+
+  for (const p of pairsResolved) {
+    const score = haversineKm(startCN, p.cnHub) + haversineKm(p.ruHub, endRU);
+    if (score < bestScore) { bestScore = score; best = p; }
+  }
+  return best;
+}
+
+function pickIntermediateHubs(country, from, to, minCount, maxCount){
+  const candidates = allHubs.filter(h =>
+    h.country === country &&
+    h.id !== from.id &&
+    h.id !== to.id &&
+    (h.type === "hub" || h.type === "service" || h.type === "office") // border исключаем
+  );
+
+  if (!candidates.length) return [];
+
+  // коридор (чем больше, тем “свободнее” выбор)
+  const corridorKm = country === "CN" ? 250 : 300;
+
+  const scored = candidates.map(h => ({
+    h,
+    dLine: pointToSegmentDistKm(h, from, to),
+    dFrom: haversineKm(from, h),
+    dTo: haversineKm(h, to)
+  }));
+
+  // сначала те, кто ближе к прямой линии, затем по суммарной дистанции
+  scored.sort((a,b) => (a.dLine - b.dLine) || ((a.dFrom+a.dTo) - (b.dFrom+b.dTo)));
+
+  const near = scored.filter(x => x.dLine <= corridorKm);
+  const pool = near.length ? near : scored;
+
+  // Берем до maxCount, но минимум minCount (если есть)
+  const take = Math.min(maxCount, pool.length);
+  const picked = pool.slice(0, take).map(x => x.h);
+
+  // если надо минимум, а кандидатов меньше — вернем что есть
+  if (picked.length < minCount) return picked;
+
+  // если больше minCount — оставим minCount на CN, на RU оставим maxCount (как есть)
+  if (picked.length > minCount && country === "CN") return picked.slice(0, minCount);
+
+  return picked;
+}
+
+function autoBuildRoute(){
+  const msg = document.getElementById("carMsg");
+  msg.textContent = "";
+
+  const startId = document.getElementById("carStartCN").value;
+  const endId = document.getElementById("carEndRU").value;
+  const forcedPairId = document.getElementById("carBorderPair").value || null;
+
+  const startCN = hubsById.get(startId);
+  const endRU = hubsById.get(endId);
+
+  if (!startCN || !endRU) {
+    msg.innerHTML = "<span class='err'>Выберите старт (CN) и конечную точку (RU)</span>";
+    return;
+  }
+
+  const pair = chooseBorderPair(startCN, endRU, forcedPairId);
+  if (!pair) {
+    msg.innerHTML = "<span class='err'>Нет настроенных пар границы (BORDER_PAIRS). Добавьте пары по code в admin.html</span>";
+    return;
+  }
+
+  const cnBorder = pair.cnHub;
+  const ruBorder = pair.ruHub;
+
+  // CN: минимум 3 промежуточных
+  const cnMids = pickIntermediateHubs("CN", startCN, cnBorder, 3, 5);
+  // RU: максимум 3 промежуточных
+  const ruMids = pickIntermediateHubs("RU", ruBorder, endRU, 0, 3);
+
+  // Маршрут: startCN -> cnMids -> cnBorder -> ruBorder -> ruMids -> endRU
+  const ids = [];
+  ids.push(startCN.id);
+  for (const h of cnMids) ids.push(h.id);
+  ids.push(cnBorder.id);
+  ids.push(ruBorder.id);
+  for (const h of ruMids) ids.push(h.id);
+  ids.push(endRU.id);
+
+  // убрать подряд дубликаты (на всякий)
+  const uniq = [];
+  for (const id of ids) {
+    if (!uniq.length || uniq[uniq.length-1] !== id) uniq.push(id);
+  }
+
+  editingRouteHubIds = uniq;
+  renderRouteList();
+
+  msg.innerHTML = `<span class='ok'>Маршрут собран: ${pair.name}</span>`;
 }
 
 /* ================= FORMS ================= */
@@ -356,6 +642,10 @@ function resetCarForm(){
   document.getElementById("carStartTime").value = "";
   document.getElementById("carPublic").value = "true";
   document.getElementById("carMsg").textContent = "";
+
+  // сброс маршрута
+  editingRouteHubIds = [];
+  renderRouteList();
 }
 
 function fillCarForm(c){
@@ -368,8 +658,15 @@ function fillCarForm(c){
   document.getElementById("carUrgency").value = c.urgency || "std";
   document.getElementById("carStartTime").value = isoToLocalDatetime(c.start_time);
   document.getElementById("carPublic").value = String(!!c.public);
-  // маршрут селектов выставим при loadAll (по хабам), здесь просто запомним
-  window.__editingRoute = Array.isArray(c.route_hub_ids) ? c.route_hub_ids.slice() : [];
+
+  editingRouteHubIds = Array.isArray(c.route_hub_ids) ? c.route_hub_ids.slice() : [];
+  renderRouteList();
+
+  // попытка заполнить старт/конец по текущему маршруту
+  const first = editingRouteHubIds[0];
+  const last = editingRouteHubIds[editingRouteHubIds.length-1];
+  if (first && hubsById.get(first)?.country === "CN") document.getElementById("carStartCN").value = first;
+  if (last && hubsById.get(last)?.country === "RU") document.getElementById("carEndRU").value = last;
 }
 
 async function saveCar(){
@@ -380,13 +677,16 @@ async function saveCar(){
     const start_time = parseLocalDatetimeToISO(document.getElementById("carStartTime").value);
     if (!start_time) throw new Error("Укажите дату/время старта");
 
-    const startHub = document.getElementById("carStartHub").value;
-    const mid1 = document.getElementById("carMid1Hub").value;
-    const mid2 = document.getElementById("carMid2Hub").value;
-    const border = document.getElementById("carBorderHub").value;
+    // маршрут берём из редактора
+    const route_hub_ids = editingRouteHubIds.filter(Boolean);
+    if (route_hub_ids.length < 2) throw new Error("Маршрут должен содержать минимум 2 точки (соберите или заполните вручную)");
 
-    const route_hub_ids = [startHub, mid1, mid2, border].filter(Boolean);
-    if (route_hub_ids.length < 2) throw new Error("Маршрут должен содержать минимум 2 точки");
+    // базовая проверка стран на краях (не строгая, но полезная)
+    const first = hubsById.get(route_hub_ids[0]);
+    const last = hubsById.get(route_hub_ids[route_hub_ids.length-1]);
+    if (!first || !last) throw new Error("Маршрут содержит неизвестные хабы (обновите данные)");
+    if (first.country !== "CN") throw new Error("Первой точкой маршрута должна быть точка в Китае (CN)");
+    if (last.country !== "RU") throw new Error("Последней точкой маршрута должна быть точка в России (RU)");
 
     const payload = {
       id: id || undefined,
@@ -439,7 +739,6 @@ async function searchCars(){
         </div>
       </div>`;
     }).join("");
-    // сохраним для edit
     window.__carsSearchCache = list;
   }catch(e){
     out.innerHTML = "<span class='err'>"+e.message+"</span>";
@@ -476,7 +775,10 @@ function renderHubsOnMap(){
     );
 
     const mk = L.marker([h.lat, h.lng], { icon: makeHubIcon(h, isActive) })
-      .bindTooltip(`${h.name_ru || "Хаб"}${isActive ? " • активный" : ""}`, { direction:"top", offset:[0,-10] });
+      .bindTooltip(
+        `${h.name_ru || "Хаб"} • ${hubTypeLabel(h.type)} • ${h.country}${isActive ? " • активный" : ""}`,
+        { direction:"top", offset:[0,-10] }
+      );
 
     mk.on("click", () => {
       fillHubForm(h);
@@ -492,7 +794,6 @@ function renderCarsOnMap(){
   carLayer.clearLayers();
   carMarkersById.clear();
 
-  // Для админки используем публичный API (позиции посчитаны), без приватных данных
   for (const c of carsCache) {
     if (!c.pos) continue;
 
@@ -500,8 +801,6 @@ function renderCarsOnMap(){
       .bindPopup(`<b>${(c.brand||"")} ${(c.model||"")}</b><br/><span class="small">${c.status||""}</span>`);
 
     mk.on("click", () => {
-      // поиск авто по id в админке: просто подставим поиск (удобно)
-      document.getElementById("carSearch").value = "";
       showTab("cars");
     });
 
@@ -511,30 +810,48 @@ function renderCarsOnMap(){
 }
 
 /* ================= LOAD ALL ================= */
+function fillBorderPairsSelect(){
+  const sel = document.getElementById("carBorderPair");
+  sel.innerHTML = "";
+  sel.appendChild(option("", "— Автовыбор пары —"));
+  for (const p of BORDER_PAIRS) {
+    sel.appendChild(option(p.id, p.name));
+  }
+}
+
+function fillStartEndSelects(){
+  const startSel = document.getElementById("carStartCN");
+  const endSel = document.getElementById("carEndRU");
+  startSel.innerHTML = "";
+  endSel.innerHTML = "";
+
+  const cn = allHubs.filter(x=>x.country==="CN");
+  const ru = allHubs.filter(x=>x.country==="RU");
+
+  // старт CN: можно и hub/service/office, border тоже можно, но лучше исключить
+  for (const h of cn) startSel.appendChild(option(h.id, `${h.name_ru} [${h.code}] (${hubTypeLabel(h.type)})`));
+  for (const h of ru) endSel.appendChild(option(h.id, `${h.name_ru} [${h.code}] (${hubTypeLabel(h.type)})`));
+}
+
 async function loadAll(){
   try {
     // 1) hubs from admin API
     const h = await api("/api/admin/hubs");
     hubs = h.hubs || [];
+    allHubs = hubs.slice();
+    hubsById = new Map(allHubs.map(x => [x.id, x]));
     document.getElementById("hubsList").textContent = "Хабов: " + hubs.length;
 
-    // 2) cars positions from public API (чтобы подсветить активные хабы и показать машины на карте)
-    const pub = await fetch("/api/public", { cache:"no-store" }).then(r=>r.json());
+    // 2) cars positions from public API (for active hubs)
+    const pub = await fetch("/api/public?t=" + Date.now(), { cache:"no-store" }).then(r=>r.json());
     carsCache = (pub.cars || []).filter(x=>x.pos);
 
-    // fill hub selects for cars (CN hubs)
-    const cn = hubs.filter(x=>x.country==="CN");
-    const fill = (selId, list, allowEmpty) => {
-      const sel = document.getElementById(selId);
-      sel.innerHTML = "";
-      if (allowEmpty) sel.appendChild(option("", "— (нет) —"));
-      for (const x of list) sel.appendChild(option(x.id, `${x.name_ru} [${x.code}]`));
-    };
-    fill("carStartHub", cn, false);
-    fill("carMid1Hub", cn, true);
-    fill("carMid2Hub", cn, true);
-    fill("carBorderHub", cn, false);
+    // Fill selects
+    fillRouteAddSelect();
+    fillStartEndSelects();
+    fillBorderPairsSelect();
 
+    renderRouteList();
     renderHubsOnMap();
     renderCarsOnMap();
   } catch(e){
@@ -547,3 +864,4 @@ setInterval(loadAll, 60_000);
 </script>
 </body>
 </html>
+
