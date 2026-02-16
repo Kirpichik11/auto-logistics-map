@@ -29,7 +29,6 @@
     .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:#f6f6f6; margin-left:6px; }
     .muted { color:#888; }
 
-    /* Icons */
     .carIcon { font-size:18px; transform: translate(-6px,-10px); filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25)); user-select:none; }
     .hubIcon {
       font-size:18px;
@@ -42,13 +41,14 @@
     }
     .hubIcon.active { background:#333; border-color:#000; color:#fff; }
 
-    /* Route editor rows */
     .routeRow{
       display:flex; gap:8px; align-items:center;
       padding:8px 10px; border:1px solid rgba(0,0,0,0.1);
       border-radius:10px; margin:6px 0;
     }
     .routeRowTitle{ flex:1; font-size:12px; }
+
+    .sep { border:none;border-top:1px dashed #eee;margin:12px 0; }
   </style>
 </head>
 <body>
@@ -112,9 +112,51 @@
       </div>
 
       <div id="hubMsg" class="small"></div>
-      <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
+
+      <hr class="sep">
       <button onclick="loadAll()">Обновить данные</button>
       <div id="hubsList" class="small"></div>
+
+      <hr class="sep">
+
+      <!-- BORDER PAIRS (управление в админке) -->
+      <b>Пары границы</b>
+      <div class="small">Связка CN-пункта границы и RU-пункта границы. Для land можно задать коридорные точки (CN) — они попадут в маршрут.</div>
+
+      <input id="pairId" type="hidden" />
+
+      <label>Название пары</label>
+      <input id="pairName" placeholder="Хэйхэ → Благовещенск" />
+
+      <label>Режим</label>
+      <select id="pairMode">
+        <option value="land">Сухопутный (land)</option>
+        <option value="sea">Морской (sea)</option>
+      </select>
+
+      <label>CN пункт границы</label>
+      <select id="pairCnHub"></select>
+
+      <label>RU пункт границы</label>
+      <select id="pairRuHub"></select>
+
+      <label>CN коридорные точки (необязательно)</label>
+      <div class="small muted">Выберите 0..N точек в Китае. Они будут вставлены между стартом и CN-границей (для land).</div>
+      <select id="pairWaypoints" multiple size="6"></select>
+
+      <label>Активна</label>
+      <select id="pairActive">
+        <option value="true">Да</option>
+        <option value="false">Нет</option>
+      </select>
+
+      <div class="row" style="margin-top:8px">
+        <button onclick="savePair()">Сохранить пару</button>
+        <button onclick="resetPairForm()">Новая</button>
+      </div>
+
+      <div id="pairMsg" class="small"></div>
+      <div id="pairsList" class="small" style="margin-top:8px"></div>
     </div>
 
     <!-- CARS -->
@@ -148,10 +190,10 @@
       <label>Старт процесса (дата/время)</label>
       <input id="carStartTime" type="datetime-local" />
 
-      <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
+      <hr class="sep">
 
       <b>Автосборка маршрута</b>
-      <div class="small">Выберите старт (CN), конечную точку (RU) и пару границы. Затем можно вручную править маршрут ниже.</div>
+      <div class="small">Выберите старт (CN), конечную точку (RU) и пару границы. Морские пары автоматически не выбираются — только если вы их выбрали вручную.</div>
 
       <label>Стартовая точка (Китай)</label>
       <select id="carStartCN"></select>
@@ -167,7 +209,7 @@
         <button type="button" onclick="clearRouteEditor()">Очистить маршрут</button>
       </div>
 
-      <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
+      <hr class="sep">
 
       <b>Маршрут (ручная правка)</b>
       <div class="small">Добавляйте/удаляйте/двигайте точки — это сохранится в route_hub_ids.</div>
@@ -192,7 +234,7 @@
 
       <div id="carMsg" class="small"></div>
 
-      <hr style="border:none;border-top:1px dashed #eee;margin:12px 0">
+      <hr class="sep">
       <b>Поиск</b>
       <label>VIN или договор</label>
       <div class="row">
@@ -220,16 +262,19 @@ let adminKey = localStorage.getItem("adminKey") || "";
 document.getElementById("adminKey").value = adminKey;
 
 let hubs = [];
-let carsCache = []; // для подсветки активных хабов
+let carsCache = [];
 let hubMarkersById = new Map();
 let carMarkersById = new Map();
+let hubsById = new Map();
+let allHubs = [];
 
 const ACTIVE_HUB_RADIUS_KM = 10;
 
-// ==== Route editor state ====
-let allHubs = [];
-let editingRouteHubIds = []; // финальный route_hub_ids, который сохраняем
-let hubsById = new Map();
+// border pairs from DB
+let borderPairs = [];
+
+// route editor
+let editingRouteHubIds = [];
 
 function hubTypeLabel(t){
   if (t === "border") return "Граница";
@@ -238,38 +283,32 @@ function hubTypeLabel(t){
   return "Хаб";
 }
 
-/**
- * ==== BORDER PAIRS CONFIG ====
- * Тут менеджер/ты прописываете пары границы по CODE (из hubs.code).
- * Важно: в паре должны существовать 2 хаба в таблице hubs: один CN, один RU.
- */
-const BORDER_PAIRS = [
-  {
-    id: "heihe-blag",
-    name: "Хэйхэ → Благовещенск",
-    cnCode: "HEIHE",
-    ruCode: "BLAG",
-    mode: "land",
-    cnWaypoints: ["BEIJING", "HARBIN"]   // ✅ сухопутный коридор
-  },
-  {
-    id: "suifenhe-uss",
-    name: "Суйфэньхэ → Уссурийск",
-    cnCode: "SUIFENHE",
-    ruCode: "USSURIISK",
-    mode: "land",
-    cnWaypoints: ["BEIJING", "HARBIN"] // или свой коридор
-  },
-  {
-    id: "shanghai-vlad",
-    name: "Шанхай → Владивосток (море)",
-    cnCode: "SHANGHAI",
-    ruCode: "VLADIVOSTOK",
-    mode: "sea",
-    cnWaypoints: [] // ✅ НИКАКИХ Пекинов/Харбинов
-  }
-];
+function hubEmoji(type) {
+  if (type === "border") return "🚧";
+  if (type === "office") return "🏢";
+  if (type === "service") return "🏪";
+  return "🏭";
+}
 
+function makeHubIcon(hub, active) {
+  const emoji = hubEmoji(hub.type);
+  const cls = active ? "hubIcon active" : "hubIcon";
+  return L.divIcon({
+    html: `<div class="${cls}">${emoji}</div>`,
+    className: "",
+    iconSize: [28,28],
+    iconAnchor: [14,14]
+  });
+}
+
+function makeCarIcon() {
+  return L.divIcon({
+    html: `<div class="carIcon">🚗</div>`,
+    className: "",
+    iconSize: [18,18],
+    iconAnchor: [9,9]
+  });
+}
 
 /* ================= UTILS ================= */
 function saveKey(){
@@ -319,33 +358,6 @@ function haversineKm(a, b) {
   return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-function hubEmoji(type) {
-  if (type === "border") return "🚧";
-  if (type === "office") return "🏢";
-  if (type === "service") return "🏪";
-  return "🏭";
-}
-
-function makeHubIcon(hub, active) {
-  const emoji = hubEmoji(hub.type);
-  const cls = active ? "hubIcon active" : "hubIcon";
-  return L.divIcon({
-    html: `<div class="${cls}">${emoji}</div>`,
-    className: "",
-    iconSize: [28,28],
-    iconAnchor: [14,14]
-  });
-}
-
-function makeCarIcon() {
-  return L.divIcon({
-    html: `<div class="carIcon">🚗</div>`,
-    className: "",
-    iconSize: [18,18],
-    iconAnchor: [9,9]
-  });
-}
-
 function parseLocalDatetimeToISO(v) {
   if (!v) return null;
   const d = new Date(v);
@@ -361,12 +373,13 @@ function isoToLocalDatetime(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/* ================= ROUTE EDITOR UI ================= */
+/* ================= HUB LABELS ================= */
 function hubLabel(h){
   const name = h.name_ru || h.code || h.id;
   return `${name} • ${hubTypeLabel(h.type)} • ${h.country}`;
 }
 
+/* ================= ROUTE EDITOR ================= */
 function fillRouteAddSelect(){
   const sel = document.getElementById("routeAddHubSelect");
   sel.innerHTML = "";
@@ -443,20 +456,38 @@ document.getElementById("routeAddBtn").addEventListener("click", () => {
 });
 
 /* ================= AUTO ROUTE BUILD ================= */
-/**
- * Алгоритм (эвристика, без графа дорог):
- * 1) Выбираем пару границы, которая минимизирует:
- *    dist(startCN -> borderCN) + dist(borderRU -> endRU)
- *    (если менеджер выбрал пару вручную — используем её)
- * 2) CN участок: startCN -> ... -> borderCN
- *    - промежуточных точек минимум 3 (если есть кандидаты)
- *    - выбираем хабы CN, которые близко к прямой линии (коридор),
- *      иначе берем ближайшие к линии.
- * 3) RU участок: borderRU -> ... -> endRU
- *    - максимум 3 промежуточные точки.
- */
+function getBorderPairById(id){
+  return borderPairs.find(p => p.id === id) || null;
+}
+
+function chooseBorderPair(startCN, endRU, forcedPairId){
+  if (!borderPairs.length) return null;
+
+  if (forcedPairId) {
+    const forced = getBorderPairById(forcedPairId);
+    if (forced) return forced;
+  }
+
+  // безопасно: sea не выбираем автоматически
+  const pool = borderPairs.filter(p => p.is_active && p.mode !== "sea");
+  const candidates = pool.length ? pool : borderPairs.filter(p => p.is_active);
+
+  let best = null;
+  let bestScore = Infinity;
+
+  for (const p of candidates) {
+    const cn = hubsById.get(p.cn_hub_id);
+    const ru = hubsById.get(p.ru_hub_id);
+    if (!cn || !ru) continue;
+
+    const score = haversineKm(startCN, cn) + haversineKm(ru, endRU);
+    if (score < bestScore) { bestScore = score; best = p; }
+  }
+
+  return best;
+}
+
 function pointToSegmentDistKm(p, a, b){
-  // приближенно: проекция в "плоских" координатах (для подбора хабов достаточно)
   const ax = a.lng, ay = a.lat;
   const bx = b.lng, by = b.lat;
   const px = p.lng, py = p.lat;
@@ -472,44 +503,15 @@ function pointToSegmentDistKm(p, a, b){
   return haversineKm({lat:py, lng:px}, {lat:cy, lng:cx});
 }
 
-function chooseBorderPair(startCN, endRU, forcedPairId){
-  if (!BORDER_PAIRS.length) return null;
-
-  const byCode = new Map(allHubs.map(h => [h.code, h]));
-  const pairsResolved = BORDER_PAIRS.map(p => ({
-    ...p,
-    cnHub: byCode.get(p.cnCode) || null,
-    ruHub: byCode.get(p.ruCode) || null
-  })).filter(p => p.cnHub && p.ruHub);
-
-  if (!pairsResolved.length) return null;
-
-  if (forcedPairId) {
-    const forced = pairsResolved.find(p => p.id === forcedPairId);
-    if (forced) return forced;
-  }
-
-  let best = null;
-  let bestScore = Infinity;
-
-  for (const p of pairsResolved) {
-    const score = haversineKm(startCN, p.cnHub) + haversineKm(p.ruHub, endRU);
-    if (score < bestScore) { bestScore = score; best = p; }
-  }
-  return best;
-}
-
 function pickIntermediateHubs(country, from, to, minCount, maxCount){
   const candidates = allHubs.filter(h =>
     h.country === country &&
     h.id !== from.id &&
     h.id !== to.id &&
-    (h.type === "hub" || h.type === "service" || h.type === "office") // border исключаем
+    h.type !== "border"
   );
-
   if (!candidates.length) return [];
 
-  // коридор (чем больше, тем “свободнее” выбор)
   const corridorKm = country === "CN" ? 250 : 300;
 
   const scored = candidates.map(h => ({
@@ -519,20 +521,15 @@ function pickIntermediateHubs(country, from, to, minCount, maxCount){
     dTo: haversineKm(h, to)
   }));
 
-  // сначала те, кто ближе к прямой линии, затем по суммарной дистанции
   scored.sort((a,b) => (a.dLine - b.dLine) || ((a.dFrom+a.dTo) - (b.dFrom+b.dTo)));
 
   const near = scored.filter(x => x.dLine <= corridorKm);
   const pool = near.length ? near : scored;
 
-  // Берем до maxCount, но минимум minCount (если есть)
   const take = Math.min(maxCount, pool.length);
   const picked = pool.slice(0, take).map(x => x.h);
 
-  // если надо минимум, а кандидатов меньше — вернем что есть
   if (picked.length < minCount) return picked;
-
-  // если больше minCount — оставим minCount на CN, на RU оставим maxCount (как есть)
   if (picked.length > minCount && country === "CN") return picked.slice(0, minCount);
 
   return picked;
@@ -556,85 +553,63 @@ function autoBuildRoute(){
 
   const pair = chooseBorderPair(startCN, endRU, forcedPairId);
   if (!pair) {
-    msg.innerHTML = "<span class='err'>Нет настроенных пар границы (BORDER_PAIRS). Добавьте пары по code в admin.html</span>";
+    msg.innerHTML = "<span class='err'>Нет активных пар границы. Создайте их в разделе «Пары границы».</span>";
     return;
   }
 
-  const cnBorder = pair.cnHub;
-  const ruBorder = pair.ruHub;
-  // ===============================
-// ВАЖНО: учитывать режим пары (land или sea)
-// ===============================
-
-// если это сухопутная пара — используем коридор
-// если морская — коридор НЕ используем
-const cnWaypoints =
-  (pair.mode === "land" && Array.isArray(pair.cnWaypoints))
-    ? pair.cnWaypoints
-    : [];
-
-// получаем реальные hubs по code
-const cnForcedHubs = cnWaypoints
-  .map(code => getHubByCode(code))
-  .filter(Boolean);
-
-// строим цепочку CN: старт → коридор → граница
-const cnChain = [startCN, ...cnForcedHubs, cnBorder];
-
-
-let cnMids = [];
-
-for (let i = 0; i < cnChain.length - 1; i++) {
-  const a = cnChain[i];
-  const b = cnChain[i+1];
-
-  const mids = pickIntermediateHubs("CN", a, b, 0, 3);
-  cnMids.push(...mids);
-}
-  // RU: максимум 3 промежуточных
-  const ruMids = pickIntermediateHubs("RU", ruBorder, endRU, 0, 3);
-
-  // Маршрут: startCN -> cnMids -> cnBorder -> ruBorder -> ruMids -> endRU
-  const ids = [
-    startCN.id,
-
-  // промежуточные CN
-    ...cnMids.map(h => h.id),
-
-  // граница CN
-    cnBorder.id,
-
-  // граница RU
-    ruBorder.id,
-
-  // промежуточные RU
-    ...ruMids.map(h => h.id),
-
-  // конечная
-    endRU.id
-  ];
-  ids.push(startCN.id);
-  for (const h of cnMids) ids.push(h.id);
-  ids.push(cnBorder.id);
-  ids.push(ruBorder.id);
-  for (const h of ruMids) ids.push(h.id);
-  ids.push(endRU.id);
-
-  // убрать подряд дубликаты (на всякий)
-  const uniq = [];
-  for (const id of ids) {
-    if (!uniq.length || uniq[uniq.length-1] !== id) uniq.push(id);
+  const cnBorder = hubsById.get(pair.cn_hub_id);
+  const ruBorder = hubsById.get(pair.ru_hub_id);
+  if (!cnBorder || !ruBorder) {
+    msg.innerHTML = "<span class='err'>Пара границы содержит неизвестные хабы (обновите данные)</span>";
+    return;
   }
 
-  editingRouteHubIds = uniq;
+  // коридорные точки только для land
+  const cnWaypointIds = (pair.mode === "land" && Array.isArray(pair.cn_waypoint_ids))
+    ? pair.cn_waypoint_ids
+    : [];
+
+  const cnForcedHubs = cnWaypointIds.map(id => hubsById.get(id)).filter(Boolean);
+  const cnChain = [startCN, ...cnForcedHubs, cnBorder];
+
+  // CN сегменты: start -> (waypoints...) -> cnBorder
+  let cnMids = [];
+  for (let i = 0; i < cnChain.length - 1; i++) {
+    const a = cnChain[i];
+    const b = cnChain[i+1];
+    const mids = pickIntermediateHubs("CN", a, b, 0, 3);
+    cnMids.push(...mids);
+  }
+
+  // RU сегмент (до 3)
+  const ruMids = pickIntermediateHubs("RU", ruBorder, endRU, 0, 3);
+
+  const ids = [
+    startCN.id,
+    ...cnMids.map(h => h.id),
+    cnBorder.id,
+    ruBorder.id,
+    ...ruMids.map(h => h.id),
+    endRU.id
+  ];
+
+  // убрать подряд дубликаты
+  const uniq = [];
+  for (const id of ids) if (!uniq.length || uniq[uniq.length-1] !== id) uniq.push(id);
+
+  // убрать любые дубли
+  const seen = new Set();
+  const finalIds = [];
+  for (const id of uniq) { if (!seen.has(id)) { seen.add(id); finalIds.push(id); } }
+
+  editingRouteHubIds = finalIds;
   renderRouteList();
 
-  msg.innerHTML = `<span class='ok'>Маршрут собран: ${pair.name}</span>`;
+  msg.innerHTML = `<span class='ok'>Маршрут собран: ${pair.name} (${pair.mode})</span>`;
 }
 
 /* ================= FORMS ================= */
 map.on("click", (e) => {
-  // только для режима Хабы: клик по карте ставит координаты
   if (document.getElementById("panelHubs").style.display !== "none") {
     document.getElementById("hubLat").value = e.latlng.lat.toFixed(6);
     document.getElementById("hubLng").value = e.latlng.lng.toFixed(6);
@@ -695,6 +670,88 @@ async function saveHub(){
   }
 }
 
+/* ===== border pair form ===== */
+function resetPairForm(){
+  document.getElementById("pairId").value = "";
+  document.getElementById("pairName").value = "";
+  document.getElementById("pairMode").value = "land";
+  document.getElementById("pairActive").value = "true";
+  // selects остаются как есть
+  document.getElementById("pairMsg").textContent = "";
+  // сброс multi-select
+  const ms = document.getElementById("pairWaypoints");
+  for (const opt of ms.options) opt.selected = false;
+}
+
+function fillPairForm(p){
+  document.getElementById("pairId").value = p.id;
+  document.getElementById("pairName").value = p.name || "";
+  document.getElementById("pairMode").value = p.mode || "land";
+  document.getElementById("pairCnHub").value = p.cn_hub_id;
+  document.getElementById("pairRuHub").value = p.ru_hub_id;
+  document.getElementById("pairActive").value = String(!!p.is_active);
+
+  const ms = document.getElementById("pairWaypoints");
+  const set = new Set(p.cn_waypoint_ids || []);
+  for (const opt of ms.options) opt.selected = set.has(opt.value);
+}
+
+function getSelectedMulti(selId){
+  const sel = document.getElementById(selId);
+  const out = [];
+  for (const opt of sel.options) if (opt.selected) out.push(opt.value);
+  return out;
+}
+
+async function savePair(){
+  const msg = document.getElementById("pairMsg");
+  msg.textContent = "";
+  try {
+    const id = document.getElementById("pairId").value || "";
+    const payload = {
+      id: id || undefined,
+      name: document.getElementById("pairName").value.trim(),
+      mode: document.getElementById("pairMode").value,
+      cn_hub_id: document.getElementById("pairCnHub").value,
+      ru_hub_id: document.getElementById("pairRuHub").value,
+      cn_waypoint_ids: getSelectedMulti("pairWaypoints"),
+      is_active: document.getElementById("pairActive").value === "true"
+    };
+
+    if (!payload.name) throw new Error("Укажите название пары");
+    if (!payload.cn_hub_id) throw new Error("Выберите CN пункт границы");
+    if (!payload.ru_hub_id) throw new Error("Выберите RU пункт границы");
+
+    // минимальная проверка стран
+    const cn = hubsById.get(payload.cn_hub_id);
+    const ru = hubsById.get(payload.ru_hub_id);
+    if (cn?.country !== "CN") throw new Error("CN пункт границы должен быть country=CN");
+    if (ru?.country !== "RU") throw new Error("RU пункт границы должен быть country=RU");
+
+    // waypoints должны быть CN
+    for (const wid of payload.cn_waypoint_ids) {
+      const h = hubsById.get(wid);
+      if (!h) throw new Error("В коридорных точках есть неизвестный хаб (обновите данные)");
+      if (h.country !== "CN") throw new Error("Коридорные точки должны быть только CN");
+      if (h.type === "border") throw new Error("Коридорная точка не должна быть border");
+    }
+
+    if (id) {
+      await api("/api/admin/border_pairs", { method:"PATCH", json: payload });
+      msg.innerHTML = "<span class='ok'>Пара обновлена</span>";
+    } else {
+      await api("/api/admin/border_pairs", { method:"POST", json: payload });
+      msg.innerHTML = "<span class='ok'>Пара создана</span>";
+    }
+
+    await loadAll();
+    resetPairForm();
+  } catch(e) {
+    msg.innerHTML = "<span class='err'>"+e.message+"</span>";
+  }
+}
+
+/* ================= CARS ================= */
 function resetCarForm(){
   document.getElementById("carId").value = "";
   document.getElementById("carVin").value = "";
@@ -706,8 +763,6 @@ function resetCarForm(){
   document.getElementById("carStartTime").value = "";
   document.getElementById("carPublic").value = "true";
   document.getElementById("carMsg").textContent = "";
-
-  // сброс маршрута
   editingRouteHubIds = [];
   renderRouteList();
 }
@@ -726,7 +781,6 @@ function fillCarForm(c){
   editingRouteHubIds = Array.isArray(c.route_hub_ids) ? c.route_hub_ids.slice() : [];
   renderRouteList();
 
-  // попытка заполнить старт/конец по текущему маршруту
   const first = editingRouteHubIds[0];
   const last = editingRouteHubIds[editingRouteHubIds.length-1];
   if (first && hubsById.get(first)?.country === "CN") document.getElementById("carStartCN").value = first;
@@ -741,11 +795,9 @@ async function saveCar(){
     const start_time = parseLocalDatetimeToISO(document.getElementById("carStartTime").value);
     if (!start_time) throw new Error("Укажите дату/время старта");
 
-    // маршрут берём из редактора
     const route_hub_ids = editingRouteHubIds.filter(Boolean);
-    if (route_hub_ids.length < 2) throw new Error("Маршрут должен содержать минимум 2 точки (соберите или заполните вручную)");
+    if (route_hub_ids.length < 2) throw new Error("Маршрут должен содержать минимум 2 точки");
 
-    // базовая проверка стран на краях (не строгая, но полезная)
     const first = hubsById.get(route_hub_ids[0]);
     const last = hubsById.get(route_hub_ids[route_hub_ids.length-1]);
     if (!first || !last) throw new Error("Маршрут содержит неизвестные хабы (обновите данные)");
@@ -864,25 +916,14 @@ function renderCarsOnMap(){
     const mk = L.marker([c.pos.lat, c.pos.lng], { icon: makeCarIcon() })
       .bindPopup(`<b>${(c.brand||"")} ${(c.model||"")}</b><br/><span class="small">${c.status||""}</span>`);
 
-    mk.on("click", () => {
-      showTab("cars");
-    });
+    mk.on("click", () => { showTab("cars"); });
 
     carMarkersById.set(c.id, mk);
     carLayer.addLayer(mk);
   }
 }
 
-/* ================= LOAD ALL ================= */
-function fillBorderPairsSelect(){
-  const sel = document.getElementById("carBorderPair");
-  sel.innerHTML = "";
-  sel.appendChild(option("", "— Автовыбор пары —"));
-  for (const p of BORDER_PAIRS) {
-    sel.appendChild(option(p.id, p.name));
-  }
-}
-
+/* ================= SELECTS ================= */
 function fillStartEndSelects(){
   const startSel = document.getElementById("carStartCN");
   const endSel = document.getElementById("carEndRU");
@@ -892,28 +933,92 @@ function fillStartEndSelects(){
   const cn = allHubs.filter(x=>x.country==="CN");
   const ru = allHubs.filter(x=>x.country==="RU");
 
-  // старт CN: можно и hub/service/office, border тоже можно, но лучше исключить
   for (const h of cn) startSel.appendChild(option(h.id, `${h.name_ru} [${h.code}] (${hubTypeLabel(h.type)})`));
   for (const h of ru) endSel.appendChild(option(h.id, `${h.name_ru} [${h.code}] (${hubTypeLabel(h.type)})`));
 }
 
+function fillPairsSelectForCars(){
+  const sel = document.getElementById("carBorderPair");
+  sel.innerHTML = "";
+  sel.appendChild(option("", "— Автовыбор (без sea) —"));
+  for (const p of borderPairs.filter(x=>x.is_active)) {
+    sel.appendChild(option(p.id, `${p.name} (${p.mode})`));
+  }
+}
+
+function fillPairsFormSelects(){
+  const cnSel = document.getElementById("pairCnHub");
+  const ruSel = document.getElementById("pairRuHub");
+  const wpSel = document.getElementById("pairWaypoints");
+
+  cnSel.innerHTML = "";
+  ruSel.innerHTML = "";
+  wpSel.innerHTML = "";
+
+  const cnBorders = allHubs.filter(h => h.country==="CN" && h.type==="border");
+  const ruBorders = allHubs.filter(h => h.country==="RU" && h.type==="border");
+  const cnCandidates = allHubs.filter(h => h.country==="CN" && h.type !== "border");
+
+  for (const h of cnBorders) cnSel.appendChild(option(h.id, `${h.name_ru} [${h.code}]`));
+  for (const h of ruBorders) ruSel.appendChild(option(h.id, `${h.name_ru} [${h.code}]`));
+  for (const h of cnCandidates) wpSel.appendChild(option(h.id, `${h.name_ru} [${h.code}] (${hubTypeLabel(h.type)})`));
+}
+
+function renderPairsList(){
+  const el = document.getElementById("pairsList");
+  const list = borderPairs.slice().sort((a,b)=> (b.created_at||"").localeCompare(a.created_at||""));
+  el.innerHTML = list.map(p => {
+    const cn = hubsById.get(p.cn_hub_id);
+    const ru = hubsById.get(p.ru_hub_id);
+    const wpCount = (p.cn_waypoint_ids || []).length;
+    return `
+      <div class="listItem">
+        <b>${p.name}</b>
+        <span class="pill">${p.mode}</span>
+        <span class="pill">${p.is_active ? "active" : "inactive"}</span><br/>
+        <span class="small">CN: ${cn ? cn.name_ru : p.cn_hub_id} → RU: ${ru ? ru.name_ru : p.ru_hub_id}</span><br/>
+        <span class="small muted">CN waypoints: ${wpCount}</span><br/>
+        <div class="row" style="margin-top:6px">
+          <button onclick="editPair('${p.id}')">Редактировать</button>
+          <button onclick="togglePairActive('${p.id}', ${!p.is_active})">${p.is_active ? "Отключить" : "Включить"}</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function editPair(id){
+  const p = borderPairs.find(x => x.id === id);
+  if (!p) return;
+  fillPairForm(p);
+  showTab("hubs");
+}
+
+async function togglePairActive(id, is_active){
+  await api("/api/admin/border_pairs", { method:"PATCH", json:{ id, is_active } });
+  await loadAll();
+}
+
+/* ================= LOAD ALL ================= */
 async function loadAll(){
   try {
-    // 1) hubs from admin API
     const h = await api("/api/admin/hubs");
     hubs = h.hubs || [];
     allHubs = hubs.slice();
     hubsById = new Map(allHubs.map(x => [x.id, x]));
     document.getElementById("hubsList").textContent = "Хабов: " + hubs.length;
 
-    // 2) cars positions from public API (for active hubs)
+    const bp = await api("/api/admin/border_pairs");
+    borderPairs = bp.border_pairs || [];
+
     const pub = await fetch("/api/public?t=" + Date.now(), { cache:"no-store" }).then(r=>r.json());
     carsCache = (pub.cars || []).filter(x=>x.pos);
 
-    // Fill selects
     fillRouteAddSelect();
     fillStartEndSelects();
-    fillBorderPairsSelect();
+    fillPairsSelectForCars();
+    fillPairsFormSelects();
+    renderPairsList();
 
     renderRouteList();
     renderHubsOnMap();
@@ -928,4 +1033,3 @@ setInterval(loadAll, 60_000);
 </script>
 </body>
 </html>
-
