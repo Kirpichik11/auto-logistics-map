@@ -101,6 +101,9 @@ function computeProgress(startMs, arriveMs, nowMs) {
 }
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   const q = String(req.query.q || "").trim();
 
   // Мини-защита от перебора: слишком короткие запросы не принимаем
@@ -176,6 +179,7 @@ export default async function handler(req, res) {
       photo_url: car.photo_url || "",
       urgency: car.urgency,
       start_time: car.start_time,
+      route_hub_ids: routeIds,
       arrive_time: new Date(arriveMs).toISOString(),
       progress,
       status,
