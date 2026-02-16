@@ -18,7 +18,7 @@ function haversineKm(a, b) {
   const dLat = toRad(b.lat - a.lat);
   const dLng = toRad(b.lng - a.lng);
   const lat1 = toRad(a.lat);
-  const lat2 = toRad(b.lat);
+  const lat2 = toRad(a.lat);
   const s =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
@@ -41,7 +41,7 @@ function buildTimeline(route, startMs, urgency) {
 
   for (let i = 0; i < route.length; i++) {
     const hub = route[i];
-    const dwell = (hub.dwell_days || 0) * f;
+    const dwell = (Number(hub.dwell_days) || 0) * f;
 
     stages.push({
       type: "dwell",
@@ -86,9 +86,7 @@ function computeProgress(startMs, arriveMs, nowMs) {
 }
 
 function position(stages, now) {
-  const s = stages.find(
-    (x) => now >= x.startMs && now < x.endMs
-  );
+  const s = stages.find((x) => now >= x.startMs && now < x.endMs);
   if (!s) return null;
 
   if (s.type === "dwell") {
@@ -102,52 +100,85 @@ function position(stages, now) {
   };
 }
 
-export default async function handler(req, res) {
-  const db = supabase();
-
-  const { data: hubs } = await db
-    .from("hubs")
-    .select("id,name_ru,lat,lng,dwell_days,type");
-
-  const hubMap = Object.fromEntries(hubs.map((h) => [h.id, h]));
-
-  const { data: cars } = await db
-    .from("cars")
-    .select("id,brand,model,photo_url,urgency,start_time,route_hub_ids")
-    .eq("public", true)
-    .eq("is_deleted", false);
-
-  const now = Date.now();
-  const result = [];
-
-  for (const c of cars) {
-    const route = c.route_hub_ids.map((id) => hubMap[id]).filter(Boolean);
-    if (route.length < 2) continue;
-
-    const startMs = Date.parse(c.start_time);
-    const { stages, arriveMs } = buildTimeline(route, startMs, c.urgency);
-
-    if (now > arriveMs + HIDE_AFTER_DAYS * 86400_000) continue;
-
-    const p = position(stages, now);
-    if (!p) continue;
-
-    const prog = computeProgress(startMs, arriveMs, now);
-
-      result.push({
-          id: c.id,
-          brand: c.brand,
-          model: c.model,
-          photo_url: c.photo_url,
-          urgency: c.urgency,
-          start_time: c.start_time,               // полезно для интерфейса
-          arrive_time: new Date(arriveMs).toISOString(),
-          progress: prog,                         // 0..1
-          ...p,
-      });
-
-  }
-
-  res.status(200).json({ cars: result, hubs });
+const allowedHubTypes = new Set(["hub", "border", "office", "service"]);
+function normalizeHubType(t) {
+  return allowedHubTypes.has(t) ? t : "hub";
 }
 
+export default async function handler(req, res) {
+  // anti-cache (важно для мобилок/iframe/телеграма)
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+
+  try {
+    const db = supabase();
+
+    const { data: hubsRaw, error: hubsErr } = await db
+      .from("hubs")
+      .select("id,name_ru,lat,lng,dwell_days,type,country,code");
+
+    if (hubsErr) {
+      return res.status(500).json({ error: "hubs_select_failed", details: hubsErr.message });
+    }
+
+    const hubs = (hubsRaw || []).map((h) => ({
+      ...h,
+      type: normalizeHubType(h.type),
+      lat: Number(h.lat),
+      lng: Number(h.lng),
+      dwell_days: Number(h.dwell_days) || 0,
+    }));
+
+    const hubMap = Object.fromEntries(hubs.map((h) => [h.id, h]));
+
+    const { data: carsRaw, error: carsErr } = await db
+      .from("cars")
+      .select("id,brand,model,photo_url,urgency,start_time,route_hub_ids")
+      .eq("public", true)
+      .eq("is_deleted", false);
+
+    if (carsErr) {
+      return res.status(500).json({ error: "cars_select_failed", details: carsErr.message });
+    }
+
+    const cars = carsRaw || [];
+    const now = Date.now();
+    const result = [];
+
+    for (const c of cars) {
+      const ids = Array.isArray(c.route_hub_ids) ? c.route_hub_ids : [];
+      const route = ids.map((id) => hubMap[id]).filter(Boolean);
+      if (route.length < 2) continue;
+
+      const startMs = Date.parse(c.start_time);
+      if (!Number.isFinite(startMs)) continue;
+
+      const { stages, arriveMs } = buildTimeline(route, startMs, c.urgency);
+
+      if (now > arriveMs + HIDE_AFTER_DAYS * 86400_000) continue;
+
+      const p = position(stages, now);
+      if (!p) continue;
+
+      const prog = computeProgress(startMs, arriveMs, now);
+
+      result.push({
+        id: c.id,
+        brand: c.brand,
+        model: c.model,
+        photo_url: c.photo_url,
+        urgency: c.urgency,
+        start_time: c.start_time,
+        route_hub_ids: ids, // ✅ НУЖНО ДЛЯ ЛИНИИ МАРШРУТА НА ФРОНТЕ
+        arrive_time: new Date(arriveMs).toISOString(),
+        progress: prog,
+        ...p, // {pos, status}
+      });
+    }
+
+    return res.status(200).json({ cars: result, hubs });
+  } catch (e) {
+    return res.status(500).json({ error: "public_unhandled", details: String(e?.message || e) });
+  }
+}
