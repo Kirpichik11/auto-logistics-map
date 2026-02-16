@@ -202,6 +202,29 @@ function hubEmoji(type) {
   if (type === "service") return "🏪";
   return "🏭";
 }
+function hubTypeLabel(type) {
+  if (type === "border") return "Пограничный пункт";
+  if (type === "office") return "Центральный офис Автоход";
+  if (type === "service") return "Пункт выдачи/сервис партнер";
+  return "Логистический узел";
+}
+
+function buildHubInfoHtml(h, isActive) {
+  const name = escapeHtml(h.name_ru || "Пункт");
+  const type = escapeHtml(hubTypeLabel(h.type));
+  const country = escapeHtml(h.country || "");
+  const extra = isActive ? `<div class="small"><b>Активный</b>: рядом есть авто</div>` : "";
+  return `
+    <div style="min-width:180px">
+      <div style="font-weight:700">${name}</div>
+      <div class="small">Тип: ${type}</div>
+      ${country ? `<div class="small">Страна: ${country}</div>` : ""}
+      ${extra}
+    </div>
+  `;
+}
+
+
 
 /* ================= ICONS ================= */
 function makeCarIcon(isSelected) {
@@ -419,16 +442,24 @@ function renderHubs(routeSet) {
     if (routeSet && routeSet.has(h.id)) continue;
 
     const mk = L.marker([h.lat, h.lng], {
-      icon: makeHubIcon(h, isHubActive(h)),
+      icon: makeHubIcon(h, isActive),
       pane: "hubPane"
-    }).bindTooltip(
-      `${escapeHtml(h.name_ru || "Хаб")}${isHubActive(h) ? " • активный" : ""}`,
-      { direction:"top", offset:[0,-10] }
+    });
+
+    // Tooltip (для десктопа / hover)
+    mk.bindTooltip(
+  `    ${escapeHtml(h.name_ru || "Пункт")} • ${escapeHtml(hubTypeLabel(h.type))}`,
+      { direction:"top", offset:[0,-10], sticky:true, opacity:0.95 }
     );
 
+    // Popup (для мобильных / tap)
+    mk.bindPopup(buildHubInfoHtml(h, isActive), { closeButton:true });
+
+    // На клик — откроем popup (на десктопе тоже удобно)
+    mk.on("click", () => mk.openPopup());
+
     hubLayer.addLayer(mk);
-  }
-}
+
 
 /* ================= MARKERS ================= */
 function buildPopup(car) {
