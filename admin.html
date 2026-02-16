@@ -244,11 +244,32 @@ function hubTypeLabel(t){
  * Важно: в паре должны существовать 2 хаба в таблице hubs: один CN, один RU.
  */
 const BORDER_PAIRS = [
-  // Пример. ЗАМЕНИ на реальные codes из твоей базы:
-  { id:"heihe-blag", name:"Хэйхэ → Благовещенск", cnCode:"HEIHE", ruCode:"BLAG" },
-  { id:"suifenhe-uss", name:"Суйфэньхэ → Уссурийск", cnCode:"SUIFENHE", ruCode:"USSURIISK" },
-  { id:"shanghai-vlad", name:"Шанхай → Владивосток", cnCode:"SHANGHAI", ruCode:"VLADIVOSTOK" },
+  {
+    id: "heihe-blag",
+    name: "Хэйхэ → Благовещенск",
+    cnCode: "HEIHE",
+    ruCode: "BLAG",
+    mode: "land",
+    cnWaypoints: ["BEIJING", "HARBIN"]   // ✅ сухопутный коридор
+  },
+  {
+    id: "suifenhe-uss",
+    name: "Суйфэньхэ → Уссурийск",
+    cnCode: "SUIFENHE",
+    ruCode: "USSURIISK",
+    mode: "land",
+    cnWaypoints: ["BEIJING", "HARBIN"] // или свой коридор
+  },
+  {
+    id: "shanghai-vlad",
+    name: "Шанхай → Владивосток (море)",
+    cnCode: "SHANGHAI",
+    ruCode: "VLADIVOSTOK",
+    mode: "sea",
+    cnWaypoints: [] // ✅ НИКАКИХ Пекинов/Харбинов
+  }
 ];
+
 
 /* ================= UTILS ================= */
 function saveKey(){
