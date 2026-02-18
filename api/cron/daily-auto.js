@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+const BASE_URL = process.env.BASE_URL || "https://auto-logistics-map.vercel.app";
 import crypto from "crypto";
 
 function supabase() {
@@ -157,6 +158,17 @@ export default async function handler(req, res) {
   // VIN для автогенерации можно хранить заглушкой (не светится в публичке)
   const vin = `AUTO${contract_no}`;
 
+// строим маршрут автоматически через тот же алгоритм, что у менеджера
+  const suggestResp = await fetch(
+    process.env.BASE_URL + `/api/admin/route_suggest?start=${startHubId}&end=${borderHubId}`
+  );
+
+  const suggestData = await suggestResp.json();
+
+  if (!suggestResp.ok) {
+    throw new Error("route suggest failed: " + suggestData.error);
+  }
+
   const payload = {
     vin,
     contract_no,
@@ -166,9 +178,10 @@ export default async function handler(req, res) {
     public: true,
     urgency: "std",
     start_time,
-    route_hub_ids: [startHubId, borderHubId],
+    route_hub_ids: suggestData.route_hub_ids, // ← ВОТ ЭТО ГЛАВНОЕ ИЗМЕНЕНИЕ
     is_deleted: false,
   };
+
 
   const { data: carIns, error: cErr } = await db
     .from("cars")
