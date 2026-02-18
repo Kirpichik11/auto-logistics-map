@@ -1,10 +1,7 @@
 {
   "rewrites": [
     { "source": "/admin", "destination": "/admin.html" }
-  ]
-}
-
-{
+  ],
   "crons": [
     {
       "path": "/api/cron/daily-auto",
