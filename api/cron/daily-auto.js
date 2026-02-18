@@ -58,6 +58,8 @@ function addMinutes(date, minutes) {
 }
 
 export default async function handler(req, res) {
+  return res.status(200).json({ ok: true, ping: "daily-auto", ts: Date.now() });
+}
   // Можно закрыть от внешних вызовов (не обязательно, но полезно)
   // Если хочешь — добавь env CRON_SECRET и проверяй заголовок.
   const db = supabase();
