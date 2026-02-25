@@ -31,7 +31,6 @@
     .ok { color:#0a7; }
     .err { color:#d33; }
 
-    /* List */
     .listCard { border:1px solid #eee; border-radius:12px; padding:10px; margin-bottom:10px; cursor:pointer; }
     .listCard:hover { background:#fafafa; }
     .listCard.active { outline:2px solid #111; background:#fbfbfb; }
@@ -42,7 +41,6 @@
     .bar > div { height:100%; background:#111; border-radius:999px; }
     .listMeta { font-size:12px; color:#666; margin-top:6px; display:flex; justify-content:space-between; gap:10px; }
 
-    /* Inline details inside selected list item */
     .detailsInline {
       margin-top: 10px;
       padding-top: 10px;
@@ -54,7 +52,6 @@
     .detailsLine { font-size:12px; color:#666; margin-top:4px; }
     .img { width:88px; height:66px; border-radius:10px; background:#f3f3f3; object-fit:cover; }
 
-    /* Машина: эмодзи */
     .carEmoji {
       font-size: 24px;
       line-height: 1;
@@ -65,7 +62,6 @@
       will-change: transform;
     }
 
-    /* Хабы: эмодзи внутри круга */
     .hubEmoji {
       display:block;
       transform: translateZ(0);
@@ -89,7 +85,6 @@
     <p class="title">Поставки автомобилей</p>
     <p class="sub">Карта ориентировочная. Статусы и позиции обновляются автоматически.</p>
 
-    <!-- SEARCH -->
     <div class="card">
       <b>Поиск авто</b>
       <div class="hint">Введите VIN или № договора (минимум 6 символов).</div>
@@ -100,11 +95,10 @@
       <div id="searchMsg" class="small"></div>
     </div>
 
-    <!-- SUMMARY -->
     <div class="card">
       <div><b id="countCars">—</b> авто на карте</div>
-      <div class="hint">Нажмите на авто в списке или на карте, чтобы увидеть детали и маршрут.</div>
-      <div class="hint">Нажмите на хаб — увидите описание (на мобилке тоже).</div>
+      <div class="hint">Нажмите на авто в списке или на карте, чтобы увидеть детали.</div>
+      <div class="hint">Маршрут линией показывается только после поиска по VIN/договору.</div>
       <div class="hint">Клик по пустой карте — сброс выбора и скрытие деталей.</div>
     </div>
 
@@ -197,16 +191,17 @@ L.control.attribution({ position: "bottomright", prefix: false })
   .addAttribution('&copy; OpenStreetMap contributors &copy; CARTO')
   .addTo(map);
 
-// Pane'ы: хабы ниже, машины выше
-map.createPane("hubPane");
+// Порядок слоёв: линия маршрута ниже хабов, машины выше всего
 map.createPane("routePane");
-map.getPane("routePane").style.zIndex = 405; // ниже hubPane(410), выше тайлов
+map.getPane("routePane").style.zIndex = 405;
+
+map.createPane("hubPane");
 map.getPane("hubPane").style.zIndex = 410;
 
 map.createPane("carPane");
 map.getPane("carPane").style.zIndex = 420;
 
-// Клик по пустой карте — сброс выбора (твоя просьба)
+// Клик по пустой карте — сброс выбора
 map.on("click", () => {
   selectCarById(null);
   map.closePopup();
@@ -217,15 +212,44 @@ map.addLayer(cluster);
 
 const hubLayer = L.layerGroup().addTo(map);
 
+/* ================= STATE ================= */
 let cars = [];
 let hubs = [];
+let hubsById = new Map();
+
 let markersByCarId = new Map();
 let selectedCarId = null;
-  // Маршрут показываем ТОЛЬКО после поиска
+
+// Маршрут линией — только после поиска
 let searchedCarId = null;
 let routeLine = null;
-let routeByCarId = new Map(); // carId -> [{lat,lng,...}]
-let hubsById = new Map(); // hubId -> hub (lat/lng)
+let routeByCarId = new Map(); // carId -> array of hub points with lat/lng
+
+/* ================= ROUTE LINE ================= */
+function clearRouteLine() {
+  if (routeLine) {
+    map.removeLayer(routeLine);
+    routeLine = null;
+  }
+}
+
+function drawRouteLine(points) {
+  clearRouteLine();
+
+  if (!Array.isArray(points) || points.length < 2) return;
+
+  const latlngs = points
+    .map(p => [Number(p.lat), Number(p.lng)])
+    .filter(x => Number.isFinite(x[0]) && Number.isFinite(x[1]));
+
+  if (latlngs.length < 2) return;
+
+  routeLine = L.polyline(latlngs, {
+    pane: "routePane",
+    weight: 5,
+    opacity: 1
+  }).addTo(map);
+}
 
 /* ================= ICONS ================= */
 function makeCarIcon(isSelected) {
@@ -265,16 +289,15 @@ function selectCarById(id) {
 
   renderCarList();
   upsertMarkers();
-    // Линию показываем только если это машина, найденная поиском
+
+  // Линию показываем только для найденной поиском машины
   if (!selectedCarId || selectedCarId !== searchedCarId) {
     clearRouteLine();
   } else {
-    const pts = routeByCarId.get(selectedCarId);
-    drawRouteLine(pts);
+    drawRouteLine(routeByCarId.get(selectedCarId));
   }
 
-    if (!selectedCarId) {
-    clearRouteLine();
+  if (!selectedCarId) {
     return;
   }
 
@@ -287,7 +310,7 @@ function selectCarById(id) {
   if (mk) mk.openPopup();
 }
 
-/* ================= LIST (EXPAND IN PLACE) ================= */
+/* ================= LIST ================= */
 function renderCarList() {
   const el = document.getElementById("carList");
 
@@ -339,7 +362,6 @@ function renderCarList() {
   for (const node of el.querySelectorAll(".listCard")) {
     node.addEventListener("click", () => {
       const id = node.getAttribute("data-id");
-      // повторный клик по активному — свернуть
       if (id === selectedCarId) selectCarById(null);
       else selectCarById(id);
     });
@@ -347,7 +369,6 @@ function renderCarList() {
 
   document.getElementById("countCars").textContent = String(cars.length);
 
-  // чтобы раскрытая карточка не "терялась" на мобиле
   if (selectedCarId) {
     const activeNode = el.querySelector(`.listCard[data-id="${selectedCarId}"]`);
     if (activeNode) activeNode.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -376,8 +397,8 @@ function renderHubs() {
     );
 
     mk.bindPopup(buildHubInfoHtml(h, isActive), { closeButton:true });
+
     mk.on("click", (e) => {
-      // чтобы клик по хабу не сбрасывал выбор машины (map click)
       if (e?.originalEvent) e.originalEvent.stopPropagation();
       mk.openPopup();
     });
@@ -415,10 +436,10 @@ function upsertMarkers() {
         icon: makeCarIcon(isSel),
         pane: "carPane"
       });
+
       marker.bindPopup(buildPopup(car));
 
       marker.on("click", (e) => {
-        // чтобы клик по машине не сбрасывал выбор (map click)
         if (e?.originalEvent) e.originalEvent.stopPropagation();
         selectCarById(car.id);
       });
@@ -433,38 +454,15 @@ function upsertMarkers() {
   }
 }
 
-  function clearRouteLine() {
-  if (routeLine) {
-    map.removeLayer(routeLine);
-    routeLine = null;
-  }
-}
-
-function drawRouteLine(points) {
-  clearRouteLine();
-  if (!Array.isArray(points) || points.length < 2) return;
-
-  const latlngs = points
-    .map(p => [Number(p.lat), Number(p.lng)])
-    .filter(x => Number.isFinite(x[0]) && Number.isFinite(x[1]));
-
-  if (latlngs.length < 2) return;
-
-  routeLine = L.polyline(latlngs, {
-    pane: "routePane",
-    weight: 4,
-    opacity: 0.9
-  }).addTo(map);
-}
-
 /* ================= DATA ================= */
 async function loadData() {
   const resp = await fetch(WORKER_PUBLIC_URL + "?t=" + Date.now(), { cache:"no-store" });
   const data = await resp.json();
 
   hubs = (data.hubs || []);
-  cars = (data.cars || []).filter(c => c.pos && typeof c.pos.lat === "number");
   hubsById = new Map(hubs.map(h => [h.id, h]));
+
+  cars = (data.cars || []).filter(c => c.pos && typeof c.pos.lat === "number");
 
   renderHubs();
   upsertMarkers();
@@ -474,6 +472,7 @@ async function loadData() {
     selectedCarId = null;
     renderCarList();
     upsertMarkers();
+    clearRouteLine();
   }
 }
 
@@ -495,44 +494,37 @@ async function doSearch() {
     if (!r.ok) throw new Error(data.error || "Не найдено");
 
     const found = data.car;
-    // Разрешаем линию только для найденной поиском машины
-searchedCarId = found.id;
 
-// Собираем точки маршрута для линии:
-// 1) если сервер прислал found.route (с координатами) — используем его
-// 2) иначе строим по route_hub_ids через hubsById (из /api/public)
-let routePoints = null;
-
-if (Array.isArray(found.route) && found.route.length >= 2) {
-  routePoints = found.route;
-} else if (Array.isArray(found.route_hub_ids) && found.route_hub_ids.length >= 2) {
-  routePoints = found.route_hub_ids
-    .map(id => hubsById.get(id))
-    .filter(Boolean);
-}
-
-if (Array.isArray(routePoints) && routePoints.length >= 2) {
-  routeByCarId.set(found.id, routePoints);
-} else {
-  routeByCarId.delete(found.id);
-}
-        // запоминаем, что маршрут разрешён только для найденной поиском машины
+    // 1) запоминаем "разрешённый" id для линии
     searchedCarId = found.id;
 
-    // сохраняем точки маршрута (координаты) из search.js
+    // 2) строим точки маршрута (сначала route, иначе — по route_hub_ids через hubsById)
+    let routePoints = null;
+
     if (Array.isArray(found.route) && found.route.length >= 2) {
-      routeByCarId.set(found.id, found.route);
+      routePoints = found.route;
+    } else if (Array.isArray(found.route_hub_ids) && found.route_hub_ids.length >= 2) {
+      routePoints = found.route_hub_ids.map(id => hubsById.get(id)).filter(Boolean);
+    }
+
+    if (Array.isArray(routePoints) && routePoints.length >= 2) {
+      routeByCarId.set(found.id, routePoints);
     } else {
       routeByCarId.delete(found.id);
     }
+
+    // 3) кладём/обновляем машину в список
     const idx = cars.findIndex(c => c.id === found.id);
     if (idx === -1) cars.unshift(found);
     else cars[idx] = found;
 
     msg.innerHTML = `<span class="ok">Найдено</span>`;
+
     renderHubs();
     upsertMarkers();
     renderCarList();
+
+    // 4) выбираем найденную — линия нарисуется в selectCarById
     selectCarById(found.id);
   } catch (e) {
     msg.innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`;
