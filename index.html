@@ -199,6 +199,8 @@ L.control.attribution({ position: "bottomright", prefix: false })
 
 // Pane'ы: хабы ниже, машины выше
 map.createPane("hubPane");
+map.createPane("routePane");
+map.getPane("routePane").style.zIndex = 405; // ниже hubPane(410), выше тайлов
 map.getPane("hubPane").style.zIndex = 410;
 
 map.createPane("carPane");
@@ -219,6 +221,10 @@ let cars = [];
 let hubs = [];
 let markersByCarId = new Map();
 let selectedCarId = null;
+  // Маршрут показываем ТОЛЬКО после поиска
+let searchedCarId = null;
+let routeLine = null;
+let routeByCarId = new Map(); // carId -> [{lat,lng,...}]
 
 /* ================= ICONS ================= */
 function makeCarIcon(isSelected) {
@@ -258,8 +264,18 @@ function selectCarById(id) {
 
   renderCarList();
   upsertMarkers();
+    // Линию показываем только если это машина, найденная поиском
+  if (!selectedCarId || selectedCarId !== searchedCarId) {
+    clearRouteLine();
+  } else {
+    const pts = routeByCarId.get(selectedCarId);
+    drawRouteLine(pts);
+  }
 
-  if (!selectedCarId) return;
+    if (!selectedCarId) {
+    clearRouteLine();
+    return;
+  }
 
   const car = cars.find(c => c.id === selectedCarId);
   if (!car || !car.pos) return;
@@ -416,6 +432,30 @@ function upsertMarkers() {
   }
 }
 
+  function clearRouteLine() {
+  if (routeLine) {
+    map.removeLayer(routeLine);
+    routeLine = null;
+  }
+}
+
+function drawRouteLine(points) {
+  clearRouteLine();
+  if (!Array.isArray(points) || points.length < 2) return;
+
+  const latlngs = points
+    .map(p => [Number(p.lat), Number(p.lng)])
+    .filter(x => Number.isFinite(x[0]) && Number.isFinite(x[1]));
+
+  if (latlngs.length < 2) return;
+
+  routeLine = L.polyline(latlngs, {
+    pane: "routePane",
+    weight: 4,
+    opacity: 0.9
+  }).addTo(map);
+}
+
 /* ================= DATA ================= */
 async function loadData() {
   const resp = await fetch(WORKER_PUBLIC_URL + "?t=" + Date.now(), { cache:"no-store" });
@@ -453,6 +493,15 @@ async function doSearch() {
     if (!r.ok) throw new Error(data.error || "Не найдено");
 
     const found = data.car;
+        // запоминаем, что маршрут разрешён только для найденной поиском машины
+    searchedCarId = found.id;
+
+    // сохраняем точки маршрута (координаты) из search.js
+    if (Array.isArray(found.route) && found.route.length >= 2) {
+      routeByCarId.set(found.id, found.route);
+    } else {
+      routeByCarId.delete(found.id);
+    }
     const idx = cars.findIndex(c => c.id === found.id);
     if (idx === -1) cars.unshift(found);
     else cars[idx] = found;
