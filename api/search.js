@@ -104,9 +104,9 @@ export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
+
   const q = String(req.query.q || "").trim();
 
-  // Мини-защита от перебора: слишком короткие запросы не принимаем
   if (!q || q.length < 6) {
     return res.status(400).json({ error: "Введите минимум 6 символов VIN или договора" });
   }
@@ -118,9 +118,13 @@ export default async function handler(req, res) {
     .select("id,name_ru,country,lat,lng,dwell_days,type");
   if (hubsErr) return res.status(500).json({ error: hubsErr.message });
 
-  const hubsById = new Map((hubs || []).map(h => [h.id, h]));
+  const hubsById = new Map((hubs || []).map(h => [h.id, {
+    ...h,
+    lat: Number(h.lat),
+    lng: Number(h.lng),
+    dwell_days: Number(h.dwell_days) || 0
+  }]));
 
-  // Поиск строго по точному совпадению (без ilike), чтобы не было “угадывания”
   const vin = q.toUpperCase();
   const contract = q;
 
@@ -156,8 +160,10 @@ export default async function handler(req, res) {
 
   const nowMs = Date.now();
   const startMs = Date.parse(car.start_time);
-  const routeIds = car.route_hub_ids || [];
+
+  const routeIds = Array.isArray(car.route_hub_ids) ? car.route_hub_ids : [];
   const route = routeIds.map(id => hubsById.get(id)).filter(Boolean);
+
   if (!startMs || route.length < 2) {
     return res.status(500).json({ error: "Маршрут/старт заданы некорректно" });
   }
@@ -171,6 +177,16 @@ export default async function handler(req, res) {
 
   const progress = computeProgress(startMs, arriveMs, nowMs);
 
+  // ✅ ВАЖНО: отдаём маршрут с координатами для рисования линии
+  const route_for_map = route.map(h => ({
+    id: h.id,
+    name_ru: h.name_ru,
+    type: h.type,
+    country: h.country,
+    lat: h.lat,
+    lng: h.lng
+  }));
+
   return res.status(200).json({
     car: {
       id: car.id,
@@ -180,6 +196,7 @@ export default async function handler(req, res) {
       urgency: car.urgency,
       start_time: car.start_time,
       route_hub_ids: routeIds,
+      route: route_for_map,              // ✅ добавили
       arrive_time: new Date(arriveMs).toISOString(),
       progress,
       status,
