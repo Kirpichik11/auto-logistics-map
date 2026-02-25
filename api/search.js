@@ -186,7 +186,15 @@ export default async function handler(req, res) {
     lat: h.lat,
     lng: h.lng
   }));
-
+  const route_for_map = route.map(h => ({
+    id: h.id,
+    name_ru: h.name_ru,
+    type: h.type,
+    country: h.country,
+    lat: Number(h.lat),
+    lng: Number(h.lng)
+  }));
+  
   return res.status(200).json({
     car: {
       id: car.id,
