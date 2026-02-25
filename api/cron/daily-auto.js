@@ -1,206 +1,172 @@
+// /api/cron/daily-auto.js
 import { createClient } from "@supabase/supabase-js";
-const BASE_URL = process.env.BASE_URL || "https://auto-logistics-map.vercel.app";
-import crypto from "crypto";
 
-function supabase() {
-  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-  });
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// Формат ddMMyyyyHHmm
+function formatContractNo(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const dd = pad(d.getDate());
+  const mm = pad(d.getMonth() + 1);
+  const yyyy = d.getFullYear();
+  const HH = pad(d.getHours());
+  const MM = pad(d.getMinutes());
+  return `${dd}${mm}${yyyy}${HH}${MM}`;
 }
 
-// Простой “секрет” для стабильного рандома (добавь в env)
-function getSeedSecret() {
-  return process.env.AUTO_SEED_SECRET || "change-me";
+// YYYY-MM-DD (UTC) — для “замка” cron
+function utcRunDateString(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-function fmtDatePartsInTz(date, timeZone) {
-  // Возвращает { dd, mm, yyyy, hh, min }
-  const parts = new Intl.DateTimeFormat("ru-RU", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
-
-  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-  return {
-    dd: map.day,
-    mm: map.month,
-    yyyy: map.year,
-    hh: map.hour,
-    min: map.minute,
-  };
-}
-
-function contractNoFromDate(date, timeZone) {
-  const { dd, mm, yyyy, hh, min } = fmtDatePartsInTz(date, timeZone);
-  return `${dd}${mm}${yyyy}${hh}${min}`;
-}
-
-function localDateKey(date, timeZone) {
-  const { dd, mm, yyyy } = fmtDatePartsInTz(date, timeZone);
-  // YYYY-MM-DD for log
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function seededInt(seedStr, maxExclusive) {
-  const hash = crypto.createHash("sha256").update(seedStr).digest();
-  // берём первые 4 байта
-  const n = hash.readUInt32BE(0);
-  return n % maxExclusive;
-}
-
-function addMinutes(date, minutes) {
-  return new Date(date.getTime() + minutes * 60_000);
+// Случайное время сегодня (10:00–20:00) по UTC
+// Если хочешь по местному времени — скажи, переделаю под Europe/Zagreb.
+function randomTimeTodayUtc() {
+  const now = new Date();
+  const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+  const hour = 10 + Math.floor(Math.random() * 11); // 10..20
+  const minute = Math.floor(Math.random() * 60);
+  base.setUTCHours(hour, minute, 0, 0);
+  return base;
 }
 
 export default async function handler(req, res) {
-  return res.status(200).json({ ok: true, ping: "daily-auto", ts: Date.now() });
-}
-  // Можно закрыть от внешних вызовов (не обязательно, но полезно)
-  // Если хочешь — добавь env CRON_SECRET и проверяй заголовок.
-  const db = supabase();
+  try {
+    // 1) Замок: отмечаем, что cron на сегодня уже выполнялся
+    const today = new Date();
+    const run_date = utcRunDateString(today);
 
-  // 1) Берём настройки
-  const { data: settings, error: sErr } = await db
-    .from("auto_gen_settings")
-    .select("enabled,start_hub_ids,border_hub_id,brands_models,timezone")
-    .eq("id", 1)
-    .limit(1);
-
-  if (sErr) return res.status(500).json({ error: sErr.message });
-  const cfg = settings?.[0];
-  if (!cfg?.enabled) return res.status(200).json({ ok: true, skipped: "disabled" });
-
-  const timeZone = cfg.timezone || "Europe/Moscow";
-  const now = new Date();
-  const runDate = localDateKey(now, timeZone); // YYYY-MM-DD (локально)
-
-  if (!Array.isArray(cfg.start_hub_ids) || cfg.start_hub_ids.length < 1) {
-    return res.status(500).json({ error: "auto_gen_settings.start_hub_ids is empty" });
-  }
-  if (!cfg.border_hub_id) {
-    return res.status(500).json({ error: "auto_gen_settings.border_hub_id is null" });
-  }
-  if (!Array.isArray(cfg.brands_models) || cfg.brands_models.length < 1) {
-    return res.status(500).json({ error: "auto_gen_settings.brands_models is empty" });
-  }
-
-  // 2) Проверяем лог на сегодня
-  const { data: logRows, error: lErr } = await db
-    .from("auto_gen_log")
-    .select("run_date,planned_at,executed_at,car_id")
-    .eq("run_date", runDate)
-    .limit(1);
-
-  if (lErr) return res.status(500).json({ error: lErr.message });
-
-  let log = logRows?.[0] || null;
-
-  // 3) Если плана на сегодня нет — создаём planned_at (стабильный рандом на день)
-  if (!log) {
-    // 10:00..20:00 => 600 минут окно
-    // baseTime: сегодня 10:00 по TZ (делаем через parts)
-    const { dd, mm, yyyy } = fmtDatePartsInTz(now, timeZone);
-    // ВАЖНО: Date в JS без TZ, поэтому планируем так:
-    // Берём "сегодня" в TZ как строку и создаём дату через UTC-компоненты
-    // Упрощение: planned_at будет храниться как timestamptz, это ок.
-    const tenAMLocalStr = `${yyyy}-${mm}-${dd}T10:00:00`;
-    // Интерпретация как “локальная” на сервере может отличаться, но нам главное сравнение now>=planned_at.
-    // Чтобы не зависеть от TZ сервера — делаем planned_at как now + offset минут внутри окна
-    // Но нам нужен привязанный к дню момент. Поэтому рассчитываем минуту и “приклеиваем” к локальному дню через Intl:
-    const minuteOfWindow = seededInt(`${runDate}|${getSeedSecret()}`, 600); // 0..599
-    // planned_at = текущий момент, но “на сегодня” — проще: берём start of today window из now в TZ:
-    // Мы сделаем planned_at как "сегодня в TZ 10:00" через Date.parse(tenAMLocalStr) + minuteOfWindow.
-    // На практике для МСК на Vercel работает стабильно.
-    const plannedBase = new Date(Date.parse(tenAMLocalStr));
-    const plannedAt = addMinutes(plannedBase, minuteOfWindow);
-
-    const { data: inserted, error: iErr } = await db
+    const lockInsert = await supabase
       .from("auto_gen_log")
-      .insert({ run_date: runDate, planned_at: plannedAt.toISOString() })
-      .select("run_date,planned_at,executed_at,car_id")
-      .limit(1);
+      .insert([{ run_date, status: "started", created_at: new Date().toISOString() }])
+      .select()
+      .single();
 
-    if (iErr) return res.status(500).json({ error: iErr.message });
-    log = inserted?.[0] || null;
+    // Если уникальный индекс сработал — значит cron уже был сегодня
+    if (lockInsert.error) {
+      // 23505 = unique_violation
+      if (lockInsert.error.code === "23505") {
+        return res.status(200).json({ ok: true, skipped: true, reason: "cron already ran today", run_date });
+      }
+      return res.status(500).json({ ok: false, error: lockInsert.error.message });
+    }
+
+    const logRowId = lockInsert.data?.id;
+
+    // 2) Получаем настройки автогенерации
+    const settingsResp = await supabase
+      .from("auto_gen_settings")
+      .select("start_hub_ids,end_hub_ids")
+      .limit(1)
+      .single();
+
+    if (settingsResp.error) {
+      await supabase.from("auto_gen_log").update({ status: "failed", error: settingsResp.error.message }).eq("id", logRowId);
+      return res.status(500).json({ ok: false, error: settingsResp.error.message });
+    }
+
+    const startHubIds = settingsResp.data?.start_hub_ids || [];
+    const endHubIds = settingsResp.data?.end_hub_ids || [];
+
+    if (!startHubIds.length || !endHubIds.length) {
+      const msg = "auto_gen_settings.start_hub_ids or end_hub_ids is empty";
+      await supabase.from("auto_gen_log").update({ status: "failed", error: msg }).eq("id", logRowId);
+      return res.status(400).json({ ok: false, error: msg });
+    }
+
+    const startHubId = startHubIds[Math.floor(Math.random() * startHubIds.length)];
+    const endHubId = endHubIds[Math.floor(Math.random() * endHubIds.length)];
+
+    // 3) Получаем маршрут через централизованный механизм (route_suggest)
+    // ВАЖНО: это вызов внутреннего API. На Vercel правильнее дергать абсолютный URL.
+    // Берем из заголовков host.
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    const proto = (req.headers["x-forwarded-proto"] || "https").split(",")[0];
+    const baseUrl = `${proto}://${host}`;
+
+    const routeResp = await fetch(`${baseUrl}/api/admin/route_suggest.js`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ startHubId, endHubId })
+    });
+
+    if (!routeResp.ok) {
+      const text = await routeResp.text();
+      await supabase.from("auto_gen_log").update({ status: "failed", error: `route_suggest failed: ${text}` }).eq("id", logRowId);
+      return res.status(500).json({ ok: false, error: "route_suggest failed", details: text });
+    }
+
+    const routeJson = await routeResp.json();
+    const route_hub_ids = routeJson?.route_hub_ids;
+
+    if (!Array.isArray(route_hub_ids) || route_hub_ids.length < 2) {
+      const msg = "route_suggest returned invalid route_hub_ids";
+      await supabase.from("auto_gen_log").update({ status: "failed", error: msg }).eq("id", logRowId);
+      return res.status(500).json({ ok: false, error: msg, routeJson });
+    }
+
+    // 4) Генерим авто
+    const start_time = randomTimeTodayUtc();
+    const baseContractNo = formatContractNo(start_time);
+
+    // Если вдруг коллизия contract_no — пробуем добавить суффикс
+    let contract_no = baseContractNo;
+    let createdCar = null;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) contract_no = `${baseContractNo}-${attempt}`;
+
+      const insertCar = await supabase
+        .from("cars")
+        .insert([
+          {
+            vin: crypto.randomUUID(), // VIN = uuid (как в ТЗ)
+            contract_no,
+            brand: "AUTO",
+            model: "GEN",
+            photo_url: null,
+            urgency: "normal",
+            start_time: start_time.toISOString(),
+            route_hub_ids,
+            public: true,
+            is_deleted: false
+          }
+        ])
+        .select()
+        .single();
+
+      if (!insertCar.error) {
+        createdCar = insertCar.data;
+        break;
+      }
+
+      // 23505 = уникальность (contract_no)
+      if (insertCar.error.code !== "23505") {
+        await supabase.from("auto_gen_log").update({ status: "failed", error: insertCar.error.message }).eq("id", logRowId);
+        return res.status(500).json({ ok: false, error: insertCar.error.message });
+      }
+    }
+
+    if (!createdCar) {
+      const msg = "Failed to create car: contract_no collisions";
+      await supabase.from("auto_gen_log").update({ status: "failed", error: msg }).eq("id", logRowId);
+      return res.status(500).json({ ok: false, error: msg });
+    }
+
+    // 5) Успех — пишем лог
+    await supabase
+      .from("auto_gen_log")
+      .update({ status: "success", car_id: createdCar.id })
+      .eq("id", logRowId);
+
+    return res.status(200).json({ ok: true, run_date, car_id: createdCar.id, contract_no: createdCar.contract_no });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
-
-  // 4) Если уже выполнено — выходим
-  if (log.executed_at) {
-    return res.status(200).json({ ok: true, skipped: "already-executed", run_date: runDate, car_id: log.car_id });
-  }
-
-  // 5) Если ещё не время — выходим
-  const plannedAtMs = Date.parse(log.planned_at);
-  if (Number.isNaN(plannedAtMs)) return res.status(500).json({ error: "bad planned_at in log" });
-
-  if (now.getTime() < plannedAtMs) {
-    return res.status(200).json({ ok: true, skipped: "too-early", run_date: runDate, planned_at: log.planned_at });
-  }
-
-  // 6) Пора создавать авто. Выбираем стартовый хаб + марку/модель детерминированно для дня
-  const startIdx = seededInt(`${runDate}|start|${getSeedSecret()}`, cfg.start_hub_ids.length);
-  const bmIdx = seededInt(`${runDate}|bm|${getSeedSecret()}`, cfg.brands_models.length);
-
-  const startHubId = cfg.start_hub_ids[startIdx];
-  const borderHubId = cfg.border_hub_id;
-
-  const bm = String(cfg.brands_models[bmIdx] || "").trim();
-  const [brandRaw, modelRaw] = bm.split("|");
-  const brand = (brandRaw || "Auto").trim();
-  const model = (modelRaw || "Generated").trim();
-
-  const start_time = new Date().toISOString();
-  const contract_no = contractNoFromDate(new Date(), timeZone);
-
-  // VIN для автогенерации можно хранить заглушкой (не светится в публичке)
-  const vin = `AUTO${contract_no}`;
-
-// строим маршрут автоматически через тот же алгоритм, что у менеджера
-  const suggestResp = await fetch(
-    process.env.BASE_URL + `/api/admin/route_suggest?start=${startHubId}&end=${borderHubId}`
-  );
-
-  const suggestData = await suggestResp.json();
-
-  if (!suggestResp.ok) {
-    throw new Error("route suggest failed: " + suggestData.error);
-  }
-
-  const payload = {
-    vin,
-    contract_no,
-    brand,
-    model,
-    photo_url: "",
-    public: true,
-    urgency: "std",
-    start_time,
-    route_hub_ids: suggestData.route_hub_ids, // ← ВОТ ЭТО ГЛАВНОЕ ИЗМЕНЕНИЕ
-    is_deleted: false,
-  };
-
-
-  const { data: carIns, error: cErr } = await db
-    .from("cars")
-    .insert(payload)
-    .select("id")
-    .limit(1);
-
-  if (cErr) return res.status(500).json({ error: cErr.message });
-
-  const carId = carIns?.[0]?.id || null;
-
-  const { error: uErr } = await db
-    .from("auto_gen_log")
-    .update({ executed_at: new Date().toISOString(), car_id: carId })
-    .eq("run_date", runDate);
-
-  if (uErr) return res.status(500).json({ error: uErr.message });
-
-  return res.status(200).json({ ok: true, created: true, run_date: runDate, car_id: carId, contract_no });
 }
