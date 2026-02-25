@@ -225,6 +225,7 @@ let selectedCarId = null;
 let searchedCarId = null;
 let routeLine = null;
 let routeByCarId = new Map(); // carId -> [{lat,lng,...}]
+let hubsById = new Map(); // hubId -> hub (lat/lng)
 
 /* ================= ICONS ================= */
 function makeCarIcon(isSelected) {
@@ -463,6 +464,7 @@ async function loadData() {
 
   hubs = (data.hubs || []);
   cars = (data.cars || []).filter(c => c.pos && typeof c.pos.lat === "number");
+  hubsById = new Map(hubs.map(h => [h.id, h]));
 
   renderHubs();
   upsertMarkers();
@@ -493,6 +495,27 @@ async function doSearch() {
     if (!r.ok) throw new Error(data.error || "Не найдено");
 
     const found = data.car;
+    // Разрешаем линию только для найденной поиском машины
+searchedCarId = found.id;
+
+// Собираем точки маршрута для линии:
+// 1) если сервер прислал found.route (с координатами) — используем его
+// 2) иначе строим по route_hub_ids через hubsById (из /api/public)
+let routePoints = null;
+
+if (Array.isArray(found.route) && found.route.length >= 2) {
+  routePoints = found.route;
+} else if (Array.isArray(found.route_hub_ids) && found.route_hub_ids.length >= 2) {
+  routePoints = found.route_hub_ids
+    .map(id => hubsById.get(id))
+    .filter(Boolean);
+}
+
+if (Array.isArray(routePoints) && routePoints.length >= 2) {
+  routeByCarId.set(found.id, routePoints);
+} else {
+  routeByCarId.delete(found.id);
+}
         // запоминаем, что маршрут разрешён только для найденной поиском машины
     searchedCarId = found.id;
 
