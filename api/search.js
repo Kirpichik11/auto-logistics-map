@@ -24,14 +24,8 @@ function haversineKm(a, b) {
 function lerpLatLng(a, b, t) {
   return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
 }
-
-function clamp01(x) {
-  return Math.max(0, Math.min(1, x));
-}
-
-function factorForUrgency(urgency) {
-  return urgency === "fast" ? FAST_FACTOR : 1.0;
-}
+function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+function factorForUrgency(urgency) { return urgency === "fast" ? FAST_FACTOR : 1.0; }
 
 function buildTimeline(route, startMs, urgency) {
   const factor = factorForUrgency(urgency);
@@ -100,115 +94,105 @@ function computeProgress(startMs, arriveMs, nowMs) {
   return clamp01((nowMs - startMs) / total);
 }
 
+async function tryContractSearch(db, contract, columnsToTry) {
+  for (const col of columnsToTry) {
+    const { data, error } = await db
+      .from("cars")
+      .select("id,brand,model,photo_url,urgency,start_time,route_hub_ids,is_deleted")
+      .eq(col, contract)
+      .eq("is_deleted", false)
+      .limit(1);
+
+    // если колонки нет — пробуем следующую
+    if (error && String(error.message || "").toLowerCase().includes("does not exist")) continue;
+    if (error) throw error;
+
+    if (data && data.length) return data[0];
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
 
-  const q = String(req.query.q || "").trim();
+  try {
+    const q = String(req.query.q || "").trim();
 
-  if (!q || q.length < 6) {
-    return res.status(400).json({ error: "Введите минимум 6 символов VIN или договора" });
-  }
-
-  const db = supabase();
-
-  const { data: hubs, error: hubsErr } = await db
-    .from("hubs")
-    .select("id,name_ru,country,lat,lng,dwell_days,type");
-  if (hubsErr) return res.status(500).json({ error: hubsErr.message });
-
-  const hubsById = new Map((hubs || []).map(h => [h.id, {
-    ...h,
-    lat: Number(h.lat),
-    lng: Number(h.lng),
-    dwell_days: Number(h.dwell_days) || 0
-  }]));
-
-  const vin = q.toUpperCase();
-  const contract = q;
-
-  let car = null;
-
-  // 1) VIN exact
-  {
-    const { data, error } = await db
-      .from("cars")
-      .select("id,brand,model,photo_url,urgency,start_time,route_hub_ids,is_deleted")
-      .eq("vin", vin)
-      .eq("is_deleted", false)
-      .limit(1);
-
-    if (error) return res.status(500).json({ error: error.message });
-    if (data && data.length) car = data[0];
-  }
-
-  // 2) Contract exact
-  if (!car) {
-    const { data, error } = await db
-      .from("cars")
-      .select("id,brand,model,photo_url,urgency,start_time,route_hub_ids,is_deleted")
-      .eq("contract_no", contract)
-      .eq("is_deleted", false)
-      .limit(1);
-
-    if (error) return res.status(500).json({ error: error.message });
-    if (data && data.length) car = data[0];
-  }
-
-  if (!car) return res.status(404).json({ error: "Автомобиль не найден" });
-
-  const nowMs = Date.now();
-  const startMs = Date.parse(car.start_time);
-
-  const routeIds = Array.isArray(car.route_hub_ids) ? car.route_hub_ids : [];
-  const route = routeIds.map(id => hubsById.get(id)).filter(Boolean);
-
-  if (!startMs || route.length < 2) {
-    return res.status(500).json({ error: "Маршрут/старт заданы некорректно" });
-  }
-
-  const { stages, arriveMs } = buildTimeline(route, startMs, car.urgency);
-  const hideAfterMs = arriveMs + HIDE_AFTER_DAYS * 86400_000;
-  if (nowMs > hideAfterMs) return res.status(404).json({ error: "Доставка завершена и скрыта" });
-
-  const { pos, status } = computePosition(stages, nowMs);
-  if (!pos) return res.status(500).json({ error: "Не удалось вычислить позицию" });
-
-  const progress = computeProgress(startMs, arriveMs, nowMs);
-
-  // ✅ ВАЖНО: отдаём маршрут с координатами для рисования линии
-  const route_for_map = route.map(h => ({
-    id: h.id,
-    name_ru: h.name_ru,
-    type: h.type,
-    country: h.country,
-    lat: h.lat,
-    lng: h.lng
-  }));
-  const route_for_map = route.map(h => ({
-    id: h.id,
-    name_ru: h.name_ru,
-    type: h.type,
-    country: h.country,
-    lat: Number(h.lat),
-    lng: Number(h.lng)
-  }));
-  
-  return res.status(200).json({
-    car: {
-      id: car.id,
-      brand: car.brand || "",
-      model: car.model || "",
-      photo_url: car.photo_url || "",
-      urgency: car.urgency,
-      start_time: car.start_time,
-      route_hub_ids: routeIds,
-      route: route_for_map,              // ✅ добавили
-      arrive_time: new Date(arriveMs).toISOString(),
-      progress,
-      status,
-      pos
+    if (!q || q.length < 6) {
+      return res.status(400).json({ error: "Введите минимум 6 символов VIN или договора" });
     }
-  });
+
+    const db = supabase();
+
+    const { data: hubs, error: hubsErr } = await db
+      .from("hubs")
+      .select("id,name_ru,country,lat,lng,dwell_days,type");
+    if (hubsErr) return res.status(500).json({ error: hubsErr.message });
+
+    const hubsById = new Map((hubs || []).map(h => [h.id, h]));
+
+    const vin = q.toUpperCase();
+    const contract = q;
+
+    let car = null;
+
+    // 1) VIN exact
+    {
+      const { data, error } = await db
+        .from("cars")
+        .select("id,brand,model,photo_url,urgency,start_time,route_hub_ids,is_deleted")
+        .eq("vin", vin)
+        .eq("is_deleted", false)
+        .limit(1);
+
+      if (error) return res.status(500).json({ error: error.message });
+      if (data && data.length) car = data[0];
+    }
+
+    // 2) Contract exact (пробуем разные имена поля)
+    if (!car) {
+      car = await tryContractSearch(db, contract, ["contract_no", "contract", "contract_number"]);
+    }
+
+    if (!car) return res.status(404).json({ error: "Автомобиль не найден" });
+
+    const nowMs = Date.now();
+    const startMs = Date.parse(car.start_time);
+    const routeIds = car.route_hub_ids || [];
+    const route = routeIds.map(id => hubsById.get(id)).filter(Boolean);
+
+    if (!startMs || route.length < 2) {
+      return res.status(500).json({ error: "Маршрут/старт заданы некорректно" });
+    }
+
+    const { stages, arriveMs } = buildTimeline(route, startMs, car.urgency);
+    const hideAfterMs = arriveMs + HIDE_AFTER_DAYS * 86400_000;
+    if (nowMs > hideAfterMs) return res.status(404).json({ error: "Доставка завершена и скрыта" });
+
+    const { pos, status } = computePosition(stages, nowMs);
+    if (!pos) return res.status(500).json({ error: "Не удалось вычислить позицию" });
+
+    const progress = computeProgress(startMs, arriveMs, nowMs);
+
+    return res.status(200).json({
+      car: {
+        id: car.id,
+        brand: car.brand || "",
+        model: car.model || "",
+        photo_url: car.photo_url || "",
+        urgency: car.urgency,
+        start_time: car.start_time,
+        route_hub_ids: routeIds,
+        arrive_time: new Date(arriveMs).toISOString(),
+        progress,
+        status,
+        pos
+      }
+    });
+  } catch (e) {
+    // критично: чтобы Vercel не отдавал HTML, всегда отвечаем JSON
+    return res.status(500).json({ error: "search_unhandled", details: String(e?.message || e) });
+  }
 }
