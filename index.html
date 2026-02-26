@@ -506,8 +506,15 @@ async function doSearch() {
     }
 
     const r = await fetch(SEARCH_URL + encodeURIComponent(q) + "&t=" + Date.now(), { cache:"no-store" });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || "Не найдено");
+    const ct = (r.headers.get("content-type") || "").toLowerCase();
+    let data;
+
+    if (ct.includes("application/json")) {
+      data = await r.json();
+    } else {
+      const text = await r.text();
+      throw new Error(text.slice(0, 200)); // покажем кусок ошибки вместо падения JSON
+    }
 
     const found = data.car;
 
