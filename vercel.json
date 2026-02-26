@@ -1,11 +1,12 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     { "source": "/admin", "destination": "/admin.html" }
   ],
   "crons": [
     {
       "path": "/api/cron/daily-auto",
-      "schedule": "0 7-17 * * *"
+      "schedule": "*/10 7-17 * * *"
     }
   ]
 }
