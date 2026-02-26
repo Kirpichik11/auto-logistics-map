@@ -236,19 +236,29 @@ function clearRouteLine() {
 function drawRouteLine(points) {
   clearRouteLine();
 
-  if (!Array.isArray(points) || points.length < 2) return;
+  if (!Array.isArray(points) || points.length < 2) {
+    console.log("ROUTE: no points or too short", points);
+    return;
+  }
 
   const latlngs = points
     .map(p => [Number(p.lat), Number(p.lng)])
     .filter(x => Number.isFinite(x[0]) && Number.isFinite(x[1]));
 
-  if (latlngs.length < 2) return;
+  if (latlngs.length < 2) {
+    console.log("ROUTE: latlngs too short after filtering", latlngs);
+    return;
+  }
 
+  // Делаем линию заметной
   routeLine = L.polyline(latlngs, {
     pane: "routePane",
-    weight: 5,
-    opacity: 1
+    color: "#111",
+    weight: 6,
+    opacity: 0.95
   }).addTo(map);
+
+  console.log("ROUTE LINE DRAWN:", latlngs.length, "points", latlngs);
 }
 
 /* ================= ICONS ================= */
@@ -489,42 +499,66 @@ async function doSearch() {
   }
 
   try {
+    // ✅ Гарантируем, что hubs/hubsById загружены ДО поиска
+    if (!hubsById || hubsById.size === 0) {
+      await loadData();
+    }
+
     const r = await fetch(SEARCH_URL + encodeURIComponent(q) + "&t=" + Date.now(), { cache:"no-store" });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || "Не найдено");
 
     const found = data.car;
 
-    // 1) запоминаем "разрешённый" id для линии
+    // Разрешаем линию только для найденной машины
     searchedCarId = found.id;
 
-    // 2) строим точки маршрута (сначала route, иначе — по route_hub_ids через hubsById)
+    // Пытаемся собрать маршрут:
+    // 1) если found.route есть (координаты уже пришли) — используем его
+    // 2) иначе — восстанавливаем по route_hub_ids через hubsById
     let routePoints = null;
 
     if (Array.isArray(found.route) && found.route.length >= 2) {
       routePoints = found.route;
+      console.log("ROUTE: using found.route", routePoints.length);
     } else if (Array.isArray(found.route_hub_ids) && found.route_hub_ids.length >= 2) {
-      routePoints = found.route_hub_ids.map(id => hubsById.get(id)).filter(Boolean);
+      const missing = [];
+      routePoints = found.route_hub_ids
+        .map(id => {
+          const h = hubsById.get(id);
+          if (!h) missing.push(id);
+          return h;
+        })
+        .filter(Boolean);
+
+      console.log("ROUTE: from route_hub_ids",
+        "ids=", found.route_hub_ids.length,
+        "points=", routePoints.length,
+        "missing=", missing.length,
+        missing
+      );
+    } else {
+      console.log("ROUTE: no route and no route_hub_ids", found);
     }
 
     if (Array.isArray(routePoints) && routePoints.length >= 2) {
       routeByCarId.set(found.id, routePoints);
     } else {
       routeByCarId.delete(found.id);
+      clearRouteLine();
+      msg.innerHTML = `<span class="ok">Найдено</span> <span class="err">(маршрут не удалось собрать — см. консоль F12)</span>`;
     }
 
-    // 3) кладём/обновляем машину в список
+    // Обновляем список/карту
     const idx = cars.findIndex(c => c.id === found.id);
     if (idx === -1) cars.unshift(found);
     else cars[idx] = found;
 
-    msg.innerHTML = `<span class="ok">Найдено</span>`;
+    if (!msg.innerHTML) msg.innerHTML = `<span class="ok">Найдено</span>`;
 
     renderHubs();
     upsertMarkers();
     renderCarList();
-
-    // 4) выбираем найденную — линия нарисуется в selectCarById
     selectCarById(found.id);
   } catch (e) {
     msg.innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`;
