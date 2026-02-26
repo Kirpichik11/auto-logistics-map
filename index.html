@@ -499,7 +499,7 @@ async function doSearch() {
   }
 
   try {
-    // ✅ Гарантируем, что hubs/hubsById загружены ДО поиска
+    // гарантируем, что hubs уже загружены
     if (!hubsById || hubsById.size === 0) {
       await loadData();
     }
@@ -510,12 +510,15 @@ async function doSearch() {
 
     const found = data.car;
 
-    // Разрешаем линию только для найденной машины
+    // разрешаем линию только для найденной машины
     searchedCarId = found.id;
 
-    // Пытаемся собрать маршрут:
-    // 1) если found.route есть (координаты уже пришли) — используем его
-    // 2) иначе — восстанавливаем по route_hub_ids через hubsById
+    // обновляем/добавляем машину в список
+    const idx = cars.findIndex(c => c.id === found.id);
+    if (idx === -1) cars.unshift(found);
+    else cars[idx] = found;
+
+    // собираем точки маршрута
     let routePoints = null;
 
     if (Array.isArray(found.route) && found.route.length >= 2) {
@@ -543,28 +546,34 @@ async function doSearch() {
 
     if (Array.isArray(routePoints) && routePoints.length >= 2) {
       routeByCarId.set(found.id, routePoints);
+      msg.innerHTML = `<span class="ok">Найдено</span>`;
     } else {
       routeByCarId.delete(found.id);
       clearRouteLine();
-      msg.innerHTML = `<span class="ok">Найдено</span> <span class="err">(маршрут не удалось собрать — см. консоль F12)</span>`;
+      msg.innerHTML = `<span class="ok">Найдено</span> <span class="err">(маршрут не найден — см. консоль F12)</span>`;
     }
 
-    // Обновляем список/карту
-    const idx = cars.findIndex(c => c.id === found.id);
-    if (idx === -1) cars.unshift(found);
-    else cars[idx] = found;
-
-    if (!msg.innerHTML) msg.innerHTML = `<span class="ok">Найдено</span>`;
-
+    // перерисовка UI
     renderHubs();
     upsertMarkers();
     renderCarList();
+
+    // выбираем найденную
     selectCarById(found.id);
+
+    // ✅ ВАЖНО: рисуем линию принудительно сразу после поиска
+    const pts = routeByCarId.get(found.id);
+    drawRouteLine(pts);
+
+    // и приблизим карту к линии, если она есть
+    if (routeLine) {
+      try { map.fitBounds(routeLine.getBounds(), { padding: [30, 30] }); } catch {}
+    }
+
   } catch (e) {
     msg.innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`;
   }
 }
-
 document.getElementById("searchBtn").addEventListener("click", doSearch);
 document.getElementById("searchInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") doSearch();
