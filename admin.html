@@ -187,43 +187,45 @@
       </div>
       <div id="carsList" class="small"></div>
     </div>
+
+    <!-- AUTOGEN (ВАЖНО: ВНУТРИ .side) -->
+    <div id="panelAutoGen" class="card" style="display:none">
+      <b>Автогенерация авто</b>
+      <div class="small">Один авто в день, случайное время внутри окна. Маршрут: старт → конечный город (любой хаб РФ).</div>
+
+      <label>Включено</label>
+      <select id="agEnabled">
+        <option value="true">Да</option>
+        <option value="false">Нет</option>
+      </select>
+
+      <label>Окно времени (часы, МСК)</label>
+      <div class="row">
+        <input id="agStartHour" placeholder="10" />
+        <input id="agEndHour" placeholder="20" />
+      </div>
+
+      <label>Часовой пояс</label>
+      <input id="agTimezone" placeholder="Europe/Moscow" />
+
+      <label>Стартовые хабы (выбор нескольких)</label>
+      <select id="agStartHubs" multiple size="8" style="height:auto"></select>
+
+      <label>Конечные хабы (РФ: любые города, можно service/hub/office)</label>
+      <select id="agEndHubs" multiple size="8" style="height:auto"></select>
+
+      <label>Список марка|модель (по строке, например Toyota|RAV4)</label>
+      <textarea id="agBrandsModels" style="width:100%;height:140px;padding:10px;border:1px solid #ddd;border-radius:10px"></textarea>
+
+      <div class="row" style="margin-top:10px">
+        <button onclick="saveAutoGen()">Сохранить</button>
+        <button onclick="loadAutoGen()">Обновить</button>
+      </div>
+
+      <div id="agMsg" class="small"></div>
+    </div>
+
   </div>
-</div>
-  
-<div id="panelAutoGen" class="card" style="display:none">
-  <b>Автогенерация авто</b>
-  <div class="small">Один авто в день, случайное время внутри окна. Маршрут: старт → конечный город (любой хаб РФ).</div>
-
-  <label>Включено</label>
-  <select id="agEnabled">
-    <option value="true">Да</option>
-    <option value="false">Нет</option>
-  </select>
-
-  <label>Окно времени (часы, МСК)</label>
-  <div class="row">
-    <input id="agStartHour" placeholder="10" />
-    <input id="agEndHour" placeholder="20" />
-  </div>
-
-  <label>Часовой пояс</label>
-  <input id="agTimezone" placeholder="Europe/Moscow" />
-
-  <label>Стартовые хабы (выбор нескольких)</label>
-  <select id="agStartHubs" multiple size="8" style="height:auto"></select>
-
-  <label>Конечные хабы (РФ: любые города, можно service/hub/office)</label>
-  <select id="agEndHubs" multiple size="8" style="height:auto"></select>
-
-  <label>Список марка|модель (по строке, например Toyota|RAV4)</label>
-  <textarea id="agBrandsModels" style="width:100%;height:140px;padding:10px;border:1px solid #ddd;border-radius:10px"></textarea>
-
-  <div class="row" style="margin-top:10px">
-    <button onclick="saveAutoGen()">Сохранить</button>
-    <button onclick="loadAutoGen()">Обновить</button>
-  </div>
-
-  <div id="agMsg" class="small"></div>
 </div>
 
 <script>
@@ -261,7 +263,6 @@ function showTab(tab){
   document.getElementById("tabCars").classList.toggle("active", tab==="cars");
   document.getElementById("tabAutoGen").classList.toggle("active", tab==="autogen");
 }
-
 
 async function api(url, opts={}){
   const headers = Object.assign({}, opts.headers || {});
@@ -655,6 +656,7 @@ async function loadAll(){
     alert(e.message + "\nПроверьте пароль (ADMIN_PASS) и переменные окружения.");
   }
 }
+
 function hubLabelForSelect(h){
   const t = h.type || "hub";
   const c = h.country || "";
@@ -683,13 +685,11 @@ async function loadAutoGen(){
     document.getElementById("agEndHour").value = String(s.window_end_hour ?? 20);
     document.getElementById("agTimezone").value = s.timezone || "Europe/Moscow";
 
-    // заполняем списки хабов из уже загруженных hubs
     const startSel = document.getElementById("agStartHubs");
     const endSel = document.getElementById("agEndHubs");
     startSel.innerHTML = "";
     endSel.innerHTML = "";
 
-    // стартовые — чаще CN, но не ограничиваем (по твоей просьбе можно потом расширить)
     for (const h of hubs) {
       startSel.appendChild(option(h.id, hubLabelForSelect(h)));
       endSel.appendChild(option(h.id, hubLabelForSelect(h)));
